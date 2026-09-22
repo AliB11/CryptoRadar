@@ -11,7 +11,7 @@
     TARGET_1: 'هدف اول', TARGET_2: 'هدف دوم', TIME_EXIT: 'پایان مهلت نگهداری', INVALIDATION: 'ابطال قیمتی سناریو'
   };
   const problems = { missing: 'قیمت در دسترس نیست', stale: 'داده کهنه است', error: 'دریافت قیمت ناموفق بود',
-    invalid: 'قیمت یا زمان داده نامعتبر است', source: 'منبع داده با طرح سازگار نیست', future: 'زمان داده در آینده است',
+    invalid: 'قیمت یا زمان داده نامعتبر است', 'invalid-time': 'ساعت پایش نامعتبر است', source: 'منبع داده با طرح سازگار نیست', future: 'زمان داده در آینده است',
     'before-entry': 'منتظر قیمت جدیدتر از زمان ورود', 'out-of-order': 'داده قدیمی‌تر از مشاهدهٔ قبلی است', 'invalid-plan': 'طرح ذخیره‌شده نامعتبر است' };
   const plans = rows => rows.flatMap(row => Array.isArray(row.protections) ? row.protections.map(p => ({ row, p })) : []);
   let options, host, quotes = {}, polling = null, lastFetch = 0;
@@ -88,7 +88,7 @@
   function eventText(event) {
     const reason = reasons[event.reason] || '';
     if (event.type === 'CREATED') return 'پایش فعال شد؛ شرایط ورود و ریسک ثبت شد.';
-    if (event.type === 'SIGNAL') return `${event.action === 'EXIT_LONG' ? 'هشدار خروج کامل' : 'هشدار کاهش دارایی'} — ${reason} — تعداد ${number(event.quantity)} — قیمت مشاهده‌شده ${price(event.observedPrice)}؛ انجام نشده`;
+    if (event.type === 'SIGNAL') return `${event.action === 'EXIT_LONG' ? 'هشدار خروج کامل' : 'هشدار کاهش دارایی'} — ${reason} — تعداد ${number(event.quantity)} — قیمت مشاهده‌شده ${price(event.observedPrice)}؛ شرط خروج محقق شده، اما فروش انجام نشده است؛ ادامهٔ افت تضمین نیست`;
     if (event.type === 'STOP_RAISED') return `حد ضرر به ${price(event.stop)} افزایش یافت — ${reason}`;
     if (event.type === 'SUPERSEDED') return 'هشدار قبلی با خروج کامل جایگزین شد — ' + reason;
     if (event.type === 'EXECUTION_RECORDED') return `ثبت دستی خروج ${number(event.quantity)} واحد در ${price(event.price)} — سود/زیان ناخالص ${price(event.grossPnl)} (بدون هزینه‌ها)`;
@@ -129,7 +129,7 @@
           ${watching && Number(row.qty) > p.remainingQty ? '<br>بخشی از موجودی فعلی خارج از این طرح است؛ خرید اضافه خودکار به طرح نمی‌پیوندد.' : ''}
         </p>
         ${pending ? `<div class="protect-action" role="status"><strong>${pending.action === 'EXIT_LONG' ? 'خروج از تمام باقی‌مانده' : 'کاهش بخشی از دارایی'} — ${reasons[pending.reason] || esc(pending.reason)}</strong>
-          <p>تعداد پیشنهادی: <b class="num">${number(pending.quantity)}</b> · قیمت هنگام هشدار: <b class="num">${price(pending.observedPrice)}</b><br>این هشدار فروش انجام‌شده نیست؛ با برگشت قیمت نیز خودکار پاک نمی‌شود.</p>
+          <p>تعداد پیشنهادی: <b class="num">${number(pending.quantity)}</b> · قیمت هنگام هشدار: <b class="num">${price(pending.observedPrice)}</b><br><b>قطعیت این کارت یعنی شرط خروج در همین مشاهده محقق شده است؛ نه تضمین ادامهٔ نزول.</b> فروش انجام‌شده نیست و با برگشت قیمت خودکار پاک نمی‌شود.</p>
           <button type="button" class="tool on" data-fill-open="${esc(p.id)}" data-signal="${esc(pending.id)}">ثبت خروجی که انجام داده‌ام</button></div>` : ''}
         <details class="protect-history" ${expanded.has(p.id) ? 'open' : ''}><summary>تاریخچهٔ معامله (${number(p.events.length)})</summary>
           <ol>${p.events.slice().reverse().map(event => `<li><time>${date(event.at)}</time><span>${esc(eventText(event))}</span></li>`).join('')}</ol>
@@ -215,7 +215,7 @@
     options = config; host = config.element;
     host.innerHTML = `<div class="protect-heading"><div><h3>حفاظت سرمایه — خروج از خرید</h3><span data-protection-count></span></div>
       <div><button class="tool on" type="button" data-protection-new>ثبت طرح حفاظت</button> <button class="tool" type="button" data-protection-refresh>بررسی قیمت</button></div></div>
-      <p class="protect-notice">فقط هشدار و ثبت دستی؛ نه فروش خودکار و نه تضمین اجرای حد ضرر. بررسی تقریباً هر ۹۰ ثانیه، فقط هنگام اجرای برنامه؛ با بسته‌شدن یا تعلیق مرورگر پایش متوقف می‌شود. دادهٔ بیش از ۵ دقیقه مبنای هشدار تازه نیست. طرح ذخیره‌شده با تغییر سیگنال خرید یا رفرش بازنویسی نمی‌شود.</p>
+      <p class="protect-notice">فقط هشدار و ثبت دستی؛ نه فروش خودکار و نه تضمین اجرای حد ضرر. «قطعیت» در این بخش فقط یعنی شرط خروجِ ثبت‌شده با یک قیمت معتبر محقق شده است، نه تضمین ادامهٔ نزول یا قیمت اجرای آینده. بررسی تقریباً هر ۹۰ ثانیه، فقط هنگام اجرای برنامه؛ با بسته‌شدن یا تعلیق مرورگر پایش متوقف می‌شود. دادهٔ بیش از ۵ دقیقه مبنای هشدار تازه نیست. طرح ذخیره‌شده با تغییر سیگنال خرید یا رفرش بازنویسی نمی‌شود.</p>
       <p class="protect-error" data-protection-error role="alert" hidden></p>
       <p class="protect-error" data-protection-invalid hidden>بعضی طرح‌های ذخیره‌شده معتبر نیستند و پایش نمی‌شوند؛ دادهٔ آن‌ها حذف نشده است.</p>
       <form class="protect-form" data-plan-form hidden>

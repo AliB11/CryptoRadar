@@ -291,3 +291,19 @@ test('quote requests are batched without dropping held assets', async () => {
   assert.equal(calls, 3);
   assert.equal(Object.keys(quotes).length, 101);
 });
+
+test('protection signals declare a met condition, not a forecast, and the saved snapshot rejects rule edits', () => {
+  const result = run(make(), 90);
+  assert.equal(result.position.pending.conditionMet, true);
+  assert.equal(result.position.pending.certainty, 'CONDITION_MET');
+  assert.equal(E.validPosition({ ...result.position, plan: { ...result.position.plan, target1: 111 } }), false);
+  assert.equal(E.validPosition({ ...result.position, events: result.position.events.slice(0, -1) }), false);
+});
+
+test('large positions do not turn a meaningful remaining quantity into floating-point dust', () => {
+  const p = run(make({ quantity: 1e12, target1: '', target2: '' }), 80).position;
+  const partial = execute(p, 1, 79);
+  assert.equal(partial.status, 'ACTIVE');
+  assert.equal(partial.remainingQty, 999999999999);
+  assert.equal(partial.pending.quantity, 999999999999);
+});
