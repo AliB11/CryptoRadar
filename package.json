@@ -1,0 +1,8 @@
+{
+  "name": "cryptoradar",
+  "private": true,
+  "description": "Persian crypto signal terminal",
+  "scripts": {
+    "start": "python3 server.py"
+  }
+}

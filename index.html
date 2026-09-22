@@ -12,8 +12,12 @@
 <meta property="og:locale" content="fa_IR">
 <meta name="twitter:card" content="summary">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="رادارِ بازار">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d10'/%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%23e8b04b' stroke-width='1.6'/%3E%3Cpath d='M16 7.5 L17.2 16 L16 17.2 L14.8 16 Z' fill='%23e8b04b'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%230a0d10' stroke='%23e8b04b' stroke-width='1.2'/%3E%3C/svg%3E">
+<link rel="icon" href="/icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>رادارِ بازار — ترمینال سیگنال کریپتو</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -486,6 +490,11 @@ footer .num{color:var(--muted)}
 .skip:focus{top:12px}
 .delta{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 22px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--amber) 7%,var(--bg2));font-size:12px;color:var(--muted)}
 .delta.on{display:flex}
+.pwa{display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 22px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--up) 8%,var(--bg2));font-size:12.5px;color:var(--text)}
+.pwa.on{display:flex}
+.pwa span{flex:1;min-width:180px;color:var(--muted)}
+.pwa .tool{background:var(--panel)}
+@media print{.pwa{display:none!important}}
 .delta b{color:var(--text)}
 .delta .dchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line2);background:var(--panel);border-radius:99px;padding:3px 10px;cursor:pointer;font-size:11.5px;color:var(--text)}
 .delta .dchip:hover{border-color:var(--amber)}
@@ -601,6 +610,13 @@ body.lock{overflow:hidden}
 
 <div class="ticker-wrap"><div class="ticker" id="ticker"></div></div>
 <div class="delta" id="delta" role="status" aria-live="polite"></div>
+<div class="pwa" id="pwaBar" role="region" aria-label="نصب برنامه">
+  <i data-lucide="download"></i>
+  <span id="pwaMsg">ترمینال را روی دستگاه نصب کنید تا آفلاین و اعلان قیمت در دسترس باشد.</span>
+  <button class="tool on" id="pwaInstall">نصب برنامه</button>
+  <button class="tool" id="pwaNotif">فعال‌سازی اعلان</button>
+  <button class="tool" id="pwaDismiss" aria-label="بستن نوار نصب">الان نه</button>
+</div>
 
 <div class="mnav-back" id="mnavBack">
   <nav class="mnav" id="mnav" aria-label="بخش‌های صفحه">
@@ -991,6 +1007,49 @@ function detectDivergence(sp,S){
 }
 
 /* ---------- L1: هاب داده ---------- */
+function cgUrl(pathWithQuery){
+  const i=pathWithQuery.indexOf('?');
+  const path=i<0?pathWithQuery:pathWithQuery.slice(0,i);
+  const qs=i<0?'':pathWithQuery.slice(i+1);
+  return `/api/proxy?src=cg&path=${encodeURIComponent(path)}${qs?'&'+qs:''}`;
+}
+async function probeProxy(){
+  try{
+    const r=await fetch('/api/proxy?src=health',{cache:'no-store'});
+    if(!r.ok)return false;
+    const v=await r.json();
+    return !!(v&&v.ok);
+  }catch(e){return false;}
+}
+async function cgGet(pathWithQuery,ttl){
+  const urls=[];
+  if(state.proxy!==false)urls.push(cgUrl(pathWithQuery));
+  urls.push('https://api.coingecko.com/api/v3/'+pathWithQuery);
+  let last;
+  for(const u of urls){
+    try{
+      const v=await Hub.jget(u,ttl);
+      if(u.startsWith('/api/'))state.proxy=true;
+      return v;
+    }catch(e){last=e;if(u.startsWith('/api/'))state.proxy=false;}
+  }
+  throw last||new Error('cg');
+}
+async function fngGet(ttl){
+  const urls=[];
+  if(state.proxy!==false)urls.push('/api/proxy?src=fng&limit=30');
+  urls.push('https://api.alternative.me/fng/?limit=30');
+  let last;
+  for(const u of urls){
+    try{
+      const v=await Hub.jget(u,ttl);
+      if(u.startsWith('/api/'))state.proxy=true;
+      return v;
+    }catch(e){last=e;if(u.startsWith('/api/'))state.proxy=false;}
+  }
+  throw last||new Error('fng');
+}
+
 const Hub={cache:new Map(),inflight:new Map(),
  async jget(url,ttl=80000){
    const c=this.cache.get(url);
@@ -1026,7 +1085,7 @@ const store={
 };
 
 /* ---------- وضعیت کلی ---------- */
-const state={coins:[],btc:null,global:null,live:false,lastUpdate:null,
+const state={coins:[],btc:null,global:null,live:false,proxy:null,lastUpdate:null,
   filter:'ALL',sort:'power',query:'',selected:null,
   btcOpts:{ema12:true,ema26:true,boll:true,piv:true,div:true},
   drOpts:{ema12:false,ema26:true,boll:true,div:true},
@@ -1765,10 +1824,9 @@ function confNotes(c){
 const STABLES=new Set(['usdt','usdc','dai','fdusd','tusd','usde','pyusd','busd','usdd','frax','usds','susd','usdp','gho','usd1','usdg','rlusd','usdb','usdx','eurc','usdy','usdf','buidl']);
 
 async function fetchLive(){
-  const base='https://api.coingecko.com/api/v3';
-  const mk=page=>Hub.jget(`${base}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d`,80000);
+  const mk=page=>cgGet(`coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d`,80000);
   const [a,b,g]=await Promise.all([mk(1),mk(2).catch(()=>null),
-    Hub.jget(base+'/global',80000).catch(()=>null)]);
+    cgGet('global',80000).catch(()=>null)]);
   const raw=[...(Array.isArray(a)?a:[]),...(Array.isArray(b)?b:[])];
   const coins=raw.filter(x=>x&&x.current_price!=null&&Array.isArray(x.sparkline_in_7d&&x.sparkline_in_7d.price)&&x.sparkline_in_7d.price.length>=120&&!STABLES.has((x.symbol||'').toLowerCase())&&!/_/.test(x.symbol||'')&&!/(tokenized|heloc|wrapped-steth)/i.test(x.id||''))
     .map(x=>({id:x.id,sym:(x.symbol||'').toUpperCase(),name:x.name,rank:x.market_cap_rank||0,
@@ -1791,14 +1849,14 @@ async function fetchLive(){
 async function loadExtras(){
   await Promise.all([
     (async()=>{try{
-      const v=await Hub.jget('https://api.alternative.me/fng/?limit=30',600000);
+      const v=await fngGet(600000);
       const d=v&&v.data;
       if(Array.isArray(d)&&d.length){
         state.fng={value:clamp(+d[0].value,0,100),hist:d.map(x=>clamp(+x.value,0,100))};
       }else state.fng=simFng();
     }catch(e){state.fng=simFng();}})(),
     (async()=>{try{
-      const v=await Hub.jget('https://api.coingecko.com/api/v3/search/trending',900000);
+      const v=await cgGet('search/trending',900000);
       const arr=v&&v.coins;
       if(Array.isArray(arr)&&arr.length){
         state.trending=arr.slice(0,8).map(x=>{const it=(x&&x.item)||{},pd=it.data||{};
@@ -1843,7 +1901,7 @@ async function getOHLC(c){
   if(e&&Date.now()-e.t<600000)return e.v;
   if(!state.live){const sc=simCandles(c);state.ohlc.set(key,{t:Date.now(),v:sc});return sc;}
   try{
-    const v=await Hub.jget(`https://api.coingecko.com/api/v3/coins/${c.id}/ohlc?vs_currency=usd&days=7`,600000);
+    const v=await cgGet(`coins/${encodeURIComponent(c.id)}/ohlc?vs_currency=usd&days=7`,600000);
     const cds=Array.isArray(v)?v.filter(r=>Array.isArray(r)&&r.length>=5&&isFinite(r[2])&&isFinite(r[3])&&r[3]>0)
       .map(r=>[+r[0],+r[1],+r[2],+r[3],+r[4]]):[];
     if(cds.length<10)throw new Error('empty');
@@ -2595,8 +2653,6 @@ function openAlerts(coin){
   if(coin){$('#alCoin').value=coin.id;$('#alPrice').value='';
     if(coin.price)$('#alPrice').value=Math.round(coin.price*1000)/1000;}
   renderAlerts();pop.classList.add('on');
-  if('Notification'in window&&Notification.permission==='default'){
-    try{Notification.requestPermission();}catch(e){}}
 }
 function checkAlerts(){
   let changed=false;
@@ -2605,9 +2661,9 @@ function checkAlerts(){
     const c=state.byId.get(al.id);if(!c)continue;
     if(alertHit(al.dir,c.price,al.price)){
       al.triggered=true;al.firedAt=Date.now();changed=true;
+      const body=`${al.dir==='above'?'عبور به بالا':'عبور به زیر'} $${fmtP(al.price)} — قیمت فعلی $${fmtP(c.price)}`;
       toast(`هشدار قیمت — ${esc(al.sym)} ${al.dir==='above'?'به بالای':'به زیرِ'} $${fmtP(al.price)} رسید (اکنون $${fmtP(c.price)})`,'warn',9000);
-      if('Notification'in window&&Notification.permission==='granted'){
-        try{new Notification(`رادارِ بازار — ${esc(al.sym)}`,{body:`${al.dir==='above'?'عبور به بالا':'عبور به زیر'} $${fmtP(al.price)} — قیمت فعلی $${fmtP(c.price)}`});}catch(e){}}
+      radarNotify(`رادارِ بازار — ${al.sym}`, body, 'al-'+al.id, '#'+encodeURIComponent(al.id), al.id);
     }}
   if(changed){store.set('radar_al',state.alerts);renderAlerts();}
 }
@@ -2616,15 +2672,20 @@ function checkAlerts(){
 function renderFooter(){
   const qa=QA.results?` · خودآزمایی موتور: <b>${fa(QA.results.filter(r=>r.ok).length)}/${fa(QA.results.length)}</b>`:'';
   $('#foot').innerHTML=
-   `منبع داده: <b>${state.live?'CoinGecko + alternative.me (زنده)':'شبیه‌سازی محلی — اتصال برقرار نشد'}</b> · آخرین به‌روزرسانی: ${N(state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')} ·
+   `منبع داده: <b>${state.live?(state.proxy?'CoinGecko از طریق پروکسی + alternative.me':'CoinGecko + alternative.me (مستقیم)'):'شبیه‌سازی محلی — اتصال برقرار نشد'}</b> · آخرین به‌روزرسانی: ${N(state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')} ·
     تحلیل ${N(fa(100))} دارایی · واگرایی قیمت/RSI · رده‌بندی هم‌گرایی ۸ عاملی · بک‌تست درون‌نمونه‌ای walk-forward · تم شب/روز${qa}<br>
     دیده‌بان، پرتفوی، هشدارها و تم فقط در مرورگر شما ذخیره می‌شوند. این ترمینال خروجی الگوریتمیِ تحلیل تکنیکال روی داده‌های تاریخی است و به هیچ عنوان توصیه سرمایه‌گذاری نیست؛ مسئولیت هر معامله با شماست.`;}
 setInterval(()=>{$('#clock').textContent=new Date().toLocaleTimeString('fa-IR',{hour12:false});},1000);
 
-const REFRESH=90;let cd=REFRESH;
+const REFRESH=90;let cd=REFRESH;let hiddenAge=0;
 function paintCd(){const el=$('#countdown');if(el)el.textContent=cd>0?fmtCd(cd):'…';}
 setInterval(()=>{
-  if(document.hidden)return;
+  if(document.hidden){
+    hiddenAge++;
+    if(hiddenAge>=180){hiddenAge=0;doRefresh(true);}
+    return;
+  }
+  hiddenAge=0;
   cd--;paintCd();
   if(cd<=0){cd=REFRESH;doRefresh(true);}},1000);
 document.addEventListener('visibilitychange',()=>{
@@ -2697,6 +2758,9 @@ function runQA(show){
   T('قالب‌بندی و منطق','تشخیص فعال‌شدن هشدار',()=>({ok:alertHit('above',100,100)===true&&alertHit('above',99.9,100)===false&&alertHit('below',99.5,100)===true}));
   T('قالب‌بندی و منطق','escape HTML نویسه‌های خطرناک',()=>({ok:esc('<x id="a">')==='&lt;x id=&quot;a&quot;&gt;'&&esc("a&b")==='a&amp;b',info:esc('<ok>')}));
   T('قالب‌بندی و منطق','فرمت شمارنده mm:ss',()=>({ok:fmtCd(90)==='1:30'&&fmtCd(5)==='0:05'&&fmtCd(0)==='0:00',info:fmtCd(90)}));
+  T('قالب‌بندی و منطق','آدرس پروکسی فقط path مجاز را می‌سازد',()=>{
+    const u=cgUrl('coins/markets?vs_currency=usd');
+    return {ok:u.startsWith('/api/proxy?src=cg&path=coins%2Fmarkets')&&u.includes('vs_currency=usd'),info:u.slice(0,80)};});
   T('لایه آمار','پیرسون روی آرایه کوتاه = ۰',()=>({ok:pearson([1],[2])===0&&pearson([],[])===0}));
 
   T('واگرایی','تشخیص پیوت روی سری زیگزاگ',()=>{
@@ -3171,6 +3235,81 @@ let rsT;window.addEventListener('resize',()=>{clearTimeout(rsT);
     if(state.coins.length){drawScatter();drawCompareChart(null);drawFngHist();drawEquity();}
   },200);});
 
+/* ---------- PWA / اعلان / پروکسی ---------- */
+let deferredPrompt=null;
+function isStandalone(){
+  try{if(window.matchMedia('(display-mode: standalone)').matches)return true;}catch(e){}
+  return !!navigator.standalone;
+}
+function isIos(){return /iphone|ipad|ipod/i.test(navigator.userAgent||'');}
+async function radarNotify(title,body,tag,url,id){
+  if(!('Notification'in window)||Notification.permission!=='granted')return;
+  const opts={body,icon:'/icons/icon-192.png',badge:'/icons/icon-192.png',tag:tag||'radar',data:{url:url||'/',id:id||null},dir:'rtl',lang:'fa'};
+  try{
+    const reg=await navigator.serviceWorker.getRegistration();
+    if(reg&&reg.showNotification){await reg.showNotification(title,opts);return;}
+  }catch(e){}
+  try{new Notification(title,{body,icon:'/icons/icon-192.png',tag:tag||'radar'});}catch(e){}
+}
+async function enableNotif(toastOk){
+  if(!('Notification'in window)){toast('این مرورگر اعلان سیستم ندارد','warn');return false;}
+  let perm=Notification.permission;
+  if(perm==='default'){
+    try{perm=await Notification.requestPermission();}catch(e){perm='denied';}
+  }
+  paintPwa();
+  if(perm==='granted'){
+    if(toastOk!==false)toast('اعلان قیمت فعال شد','ok');
+    radarNotify('رادارِ بازار','اعلان‌ها وصل شدند. اگر قیمت به هدف هشدار برسد خبر می‌دهیم.','radar-on','/',null);
+    return true;
+  }
+  toast('اجازهٔ اعلان داده نشد — از تنظیمات مرورگر می‌توانید فعال کنید','warn');
+  return false;
+}
+function paintPwa(){
+  const bar=$('#pwaBar');if(!bar)return;
+  const hide=store.get('radar_pwa_hide',false);
+  const stand=isStandalone();
+  const canInstall=!!deferredPrompt||(isIos()&&!stand);
+  const notifNeed=('Notification'in window)&&Notification.permission==='default';
+  const inst=$('#pwaInstall'),msg=$('#pwaMsg'),nb=$('#pwaNotif');
+  if(inst)inst.style.display=canInstall?'inline-flex':'none';
+  if(nb){nb.style.display=('Notification'in window)&&Notification.permission!=='granted'?'inline-flex':'none';
+    nb.textContent=Notification.permission==='denied'?'اعلان مسدود است':'فعال‌سازی اعلان';}
+  if(isIos()&&!stand)msg.textContent='در آیفون: دکمهٔ اشتراک را بزنید و Add to Home Screen را انتخاب کنید.';
+  else if(deferredPrompt)msg.textContent='ترمینال را نصب کنید تا آفلاین، میانبر خانه و اعلان قیمت داشته باشید.';
+  else msg.textContent='اعلان سیستم را روشن کنید تا هشدار قیمت حتی با تب در پس‌زمینه برسد.';
+  const show=!hide&&!stand&&(canInstall||notifNeed);
+  bar.classList.toggle('on',!!show);
+}
+function setupPwa(){
+  paintPwa();
+  if('serviceWorker'in navigator){
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    navigator.serviceWorker.addEventListener('message',e=>{
+      const d=e.data||{};
+      if(d.type==='radar-open'&&d.id&&state.byId.has(d.id))openDrawer(d.id);
+    });
+  }
+  window.addEventListener('beforeinstallprompt',e=>{
+    e.preventDefault();deferredPrompt=e;store.del('radar_pwa_hide');paintPwa();
+  });
+  window.addEventListener('appinstalled',()=>{deferredPrompt=null;store.set('radar_pwa_hide',true);paintPwa();toast('رادارِ بازار روی دستگاه نصب شد','ok');});
+  const inst=$('#pwaInstall');
+  if(inst)inst.onclick=async()=>{
+    if(deferredPrompt){
+      deferredPrompt.prompt();
+      try{await deferredPrompt.userChoice;}catch(e){}
+      deferredPrompt=null;paintPwa();return;
+    }
+    if(isIos())toast('از منوی اشتراک Safari گزینه Add to Home Screen را بزنید','ok',7000);
+    else toast('نصب در این مرورگر از منوی «نصب برنامه» در دسترس است','warn');
+  };
+  const nb=$('#pwaNotif');if(nb)nb.onclick=()=>enableNotif(true);
+  const ds=$('#pwaDismiss');if(ds)ds.onclick=()=>{store.set('radar_pwa_hide',true);paintPwa();};
+  icons();
+}
+
 /* ---------- پالت فرمان / منوی موبایل / مسیر hash ---------- */
 const SECTIONS=[
   ['secAnchor','لنگر بازار','بخش'],
@@ -3209,7 +3348,9 @@ function renderCmd(q){
   });
   [['theme','تغییر تم شب/روز',()=>$('#themeBtn').click()],
    ['refresh','به‌روزرسانی داده',()=>$('#refreshBtn').click()],
-   ['help','راهنمای میانبرها',openHelp]
+   ['help','راهنمای میانبرها',openHelp],
+   ['install','نصب برنامه روی دستگاه',()=>{const b=$('#pwaInstall');if(b)b.click();else toast('نصب در این مرورگر در دسترس نیست','warn');}],
+   ['notif','فعال‌سازی اعلان قیمت',()=>enableNotif(true)]
   ].forEach(([id,title,run])=>{if(!q||hit(title)||hit(id))push(id,title,'فرمان',run);});
   cmdActs=acts.slice(0,18);cmdSel=0;
   $('#cmdList').innerHTML=cmdActs.length?cmdActs.map((a,i)=>`<div class="cmd-item ${i===0?'sel':''}" data-i="${i}">
@@ -3273,6 +3414,8 @@ $('#delta').addEventListener('click',e=>{
   applyTheme((()=>{const s=store.get(THEME_KEY,null);if(s==='day'||s==='night')return s;
     try{if(matchMedia('(prefers-color-scheme: light)').matches)return 'day';}catch(e){}
     return 'night';})(),false);
+  setupPwa();
+  try{state.proxy=await probeProxy();}catch(e){state.proxy=false;}
   buildCompass();
   setTimeout(()=>{if(!bootDone)bootRecover('بارگذاری بیش از حد طول کشید (شبکه یا محدودیت نرخ) — ادامه با داده شبیه‌سازی');},25000);
   setTimeout(()=>{const b=$('#bootSkip');if(b&&!bootDone)b.style.display='inline-flex';},7000);
