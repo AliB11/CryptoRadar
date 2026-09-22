@@ -1,9 +1,12 @@
 /* رادارِ بازار — service worker */
-const CACHE = 'radar-shell-v1';
+const CACHE = 'radar-shell-v2-protection';
 const SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
+  '/protection.js',
+  '/protection-view.js',
+  '/protection.css',
   '/icons/icon-192.png',
   '/icons/icon-512.png'
 ];
