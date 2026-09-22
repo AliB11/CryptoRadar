@@ -18,6 +18,7 @@
 <link rel="icon" href="/icons/icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="protection.css">
 <title>رادارِ بازار — ترمینال سیگنال کریپتو</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -765,9 +766,10 @@ body.lock{overflow:hidden}
   <section class="reveal" id="secPortfolio">
     <div class="sec-head">
       <span class="sec-no">08</span><h2 class="sec-title">پرتفوی شبیه‌سازی‌شده</h2>
-      <p class="sec-desc">دارایی‌ها و بهای خریدتان را ثبت کنید تا ارزش لحظه‌ای، سود/زیان، سهم هر دارایی و ترکیب کل به‌صورت زنده محاسبه شود — همه‌چیز فقط در مرورگر شما (localStorage) ذخیره می‌شود و جایی ارسال نمی‌شود.</p>
+      <p class="sec-desc">دارایی‌ها و بهای خریدتان را ثبت کنید تا ارزش، سود/زیان و سهم هر دارایی محاسبه شود. تعداد، بهای خرید و طرح حفاظت فقط در مرورگر شما (localStorage) ذخیره می‌شود؛ برای دریافت قیمت حفاظتی، فقط شناسهٔ دارایی به سرویس داده ارسال می‌شود.</p>
     </div>
     <div class="listwrap" style="padding:18px" id="pfWrap"></div>
+    <div class="protection" id="protectionWrap" aria-label="حفاظت سرمایه و خروج از خرید"></div>
   </section>
 
   <section class="reveal" id="secCompare">
@@ -841,6 +843,8 @@ body.lock{overflow:hidden}
   </div>
 </div>
 
+<script src="protection.js"></script>
+<script src="protection-view.js"></script>
 <script>
 'use strict';
 /* ============================================================
@@ -1093,7 +1097,7 @@ const state={coins:[],btc:null,global:null,live:false,proxy:null,lastUpdate:null
   fng:null,trending:[],gainers:[],losers:[],stru:null,perf:0,
   ohlc:new Map(),drCandle:false,cmp:{a:null,b:null},_rrPts:[],_rrH:null,_btH:null,_sig:null,
   wl:new Set(store.get('radar_wl',[])),
-  pf:store.get('radar_pf',[]),
+  pf:(()=>{const rows=store.get('radar_pf',[]);return Array.isArray(rows)?rows:[];})(),
   alerts:store.get('radar_al',[]),
   bt:null,btUI:{th:25,risk:1}};
 const QA={results:null,ms:0};
@@ -2489,7 +2493,7 @@ function renderDrawer(){
 
 /* ---------- پرتفوی ---------- */
 function pfRows(){
-  return state.pf.map(p=>{
+  return state.pf.filter(p=>p.qty>0).map(p=>{
     const c=state.byId.get(p.id);const price=c?c.price:null;
     const value=price!=null?p.qty*price:null;
     const cost=p.qty*(p.buy||0);
@@ -2537,15 +2541,16 @@ function renderPortfolio(){
         <input id="pfBuy" type="number" min="0" step="any" placeholder="بهای خرید ($)">
         <button class="tool on" data-pfadd><i data-lucide="plus"></i>افزودن</button>
       </div>
-      ${rows.length?`<table class="pf-table"><tr><th>دارایی</th><th>تعداد</th><th>بهای خرید</th><th>قیمت فعلی</th><th>ارزش</th><th>سود/زیان</th><th>سهم</th><th></th></tr>
+      ${rows.length?`<table class="pf-table"><tr><th>دارایی</th><th>تعداد</th><th>بهای خرید</th><th>قیمت فعلی</th><th>ارزش</th><th>سود/زیان</th><th>سهم</th><th>حفاظت</th><th></th></tr>
       ${rows.map((rw,k)=>`<tr>
         <td><b>${esc(rw.name)}</b><span class="sym">${esc(rw.sym)}</span></td>
-        <td><input type="number" min="0" step="any" value="${rw.qty}" data-pfqty="${rw.id}" class="pf-inp"></td>
+        <td><input type="number" min="0" step="any" value="${rw.qty}" data-pfqty="${rw.id}" class="pf-inp" ${(rw.protections||[]).some(RadarProtection.active)?'disabled title="تعداد طرح فعال فقط با ثبت خروج تغییر می‌کند"':''}></td>
         <td class="num">$${fmtP(rw.buy)}</td>
         <td class="num">${rw.price!=null?'$'+fmtP(rw.price):'—'}</td>
         <td class="num">${rw.value!=null?fmtBig(rw.value):'—'}</td>
         <td class="num ${rw.pnl==null?'':rw.pnl>=0?'up':'down'}">${rw.pnl==null?'—':fmtPct(rw.pnl)}</td>
         <td><div class="sbar"><i style="${tot>0&&rw.value?`left:0;width:${(rw.value/tot*100).toFixed(1)}%;background:${PAL[k%PAL.length]}`:''}"></i></div></td>
+        <td><button class="tool protect-row-btn" data-pfprotect="${esc(rw.id)}">${(rw.protections||[]).some(RadarProtection.active)?'مشاهدهٔ حفاظت':'ثبت حفاظت'}</button></td>
         <td><button class="pf-del" data-pfdel="${rw.id}" title="حذف"><i data-lucide="trash-2"></i></button></td>
       </tr>`).join('')}</table>`
       :`<div class="empty">پرتفوی خالی است — از فرم بالا یا دکمه‌ی «افزودن به پرتفوی» در تحلیل هر ارز شروع کنید.</div>`}
@@ -2557,22 +2562,71 @@ function renderPortfolio(){
   $('#pfLegend').innerHTML=rows.slice(0,8).map((rw,k)=>
     `<div class="dl-item"><i style="background:${PAL[k%PAL.length]}"></i>${esc(rw.sym)} <b>${tot>0&&rw.value?Math.round(rw.value/tot*100)+'%':'—'}</b></div>`).join('');
 }
-function pfAdd(){
+// A protection event and its portfolio quantity change share one atomic storage write.
+async function pfCommit(mutator){
+  const commit=()=>{
+    try{
+      const raw=localStorage.getItem('radar_pf');
+      const rows=raw?JSON.parse(raw):JSON.parse(JSON.stringify(state.pf));
+      if(!Array.isArray(rows)||rows.some(p=>!p||typeof p.id!=='string'))throw new Error('ساختار پرتفوی ذخیره‌شده معتبر نیست؛ داده حذف نشد.');
+      const value=mutator(rows),next=JSON.stringify(rows);
+      if(next!==raw)localStorage.setItem('radar_pf',next);
+      state.pf=rows;
+      return{ok:true,value};
+    }catch(e){return{ok:false,error:e&&e.message||'ذخیرهٔ پرتفوی ممکن نشد؛ تغییری ثبت نشد.'};}
+  };
+  // Serialize read/modify/write across tabs where Web Locks is available.
+  try{return navigator.locks?await navigator.locks.request('radar-portfolio-write',commit):commit();}
+  catch(e){return{ok:false,error:'ذخیرهٔ پرتفوی ممکن نشد؛ تغییری ثبت نشد.'};}
+}
+function pfChanged(){renderPortfolio();ProtectionView.render();}
+function pfProtect(id){
+  const p=state.pf.find(p=>p.id===id);
+  if(!p){toast('ابتدا خرید را به پرتفوی اضافه کنید','warn');return;}
+  if((p.protections||[]).some(RadarProtection.active)){
+    document.getElementById('protectionWrap').scrollIntoView({behavior:'smooth',block:'start'});
+    ProtectionView.render();return;
+  }
+  ProtectionView.open(id);
+}
+async function pfAdd(){
   const id=$('#pfCoin')?$('#pfCoin').value:null;const c=id&&state.byId.get(id);
   const qty=parseFloat($('#pfQty')&&$('#pfQty').value);
   if(!c||!isFinite(qty)||qty<=0){toast('دارایی و تعداد معتبر وارد کنید','warn');return;}
-  const buy=parseFloat($('#pfBuy')&&$('#pfBuy').value)||c.price;
-  const ex=state.pf.find(p=>p.id===id);
-  if(ex){ex.buy=(ex.buy*ex.qty+buy*qty)/(ex.qty+qty);ex.qty+=qty;}
-  else state.pf.push({id:c.id,sym:c.sym,name:c.name,qty,buy});
-  store.set('radar_pf',state.pf);renderPortfolio();
-  toast(`${esc(c.name)} به پرتفوی اضافه شد`,'ok');}
-function pfAddFrom(c){
-  const ex=state.pf.find(p=>p.id===c.id);
-  if(ex){ex.buy=(ex.buy*ex.qty+c.price)/(ex.qty+1);ex.qty+=1;}
-  else state.pf.push({id:c.id,sym:c.sym,name:c.name,qty:1,buy:c.price});
-  store.set('radar_pf',state.pf);renderPortfolio();
-  toast(`${esc(c.name)} به پرتفوی اضافه شد (۱ واحد)`,'ok');}
+  const rawBuy=$('#pfBuy')&&$('#pfBuy').value;
+  const buy=rawBuy===''?c.price:parseFloat(rawBuy);
+  if(!isFinite(buy)||buy<=0){toast('بهای خرید باید مثبت باشد','warn');return;}
+  const result=await pfCommit(rows=>{
+    const ex=rows.find(p=>p.id===id);
+    if(ex){ex.buy=(ex.buy*ex.qty+buy*qty)/(ex.qty+qty);ex.qty+=qty;}
+    else rows.push({id:c.id,sym:c.sym,name:c.name,qty,buy});
+  });
+  if(!result.ok){toast(esc(result.error),'err');return;}
+  pfChanged();toast(`${esc(c.name)} به پرتفوی اضافه شد؛ شرایط طرح حفاظتی قبلی تغییر نکرد`,'ok');
+}
+async function pfAddFrom(c){
+  const result=await pfCommit(rows=>{
+    const ex=rows.find(p=>p.id===c.id);
+    if(ex){ex.buy=(ex.buy*ex.qty+c.price)/(ex.qty+1);ex.qty+=1;}
+    else rows.push({id:c.id,sym:c.sym,name:c.name,qty:1,buy:c.price});
+  });
+  if(!result.ok){toast(esc(result.error),'err');return;}
+  pfChanged();toast(`${esc(c.name)} به پرتفوی اضافه شد (۱ واحد)؛ طرح حفاظتی قبلی تغییر نکرد`,'ok');
+}
+function setupProtection(){
+  ProtectionView.mount({element:$('#protectionWrap'),getPortfolio:()=>state.pf,mutate:pfCommit,
+    onChange:renderPortfolio,toast,notify:radarNotify,directOnly:()=>state.proxy===false,
+    simulatedQuotes:()=>{
+      const quotes={};
+      if(!state.live&&state.lastUpdate)for(const c of state.coins)if(c.id.startsWith('sim-'))
+        quotes[c.id]={coinId:c.id,price:c.price,asOf:state.lastUpdate.getTime(),source:'simulation',status:'fresh'};
+      return quotes;
+    }});
+  window.addEventListener('storage',e=>{
+    if(e.key!=='radar_pf'&&e.key!==null)return;
+    try{const rows=JSON.parse(localStorage.getItem('radar_pf')||'[]');if(Array.isArray(rows)){state.pf=rows;pfChanged();}}catch(_){}
+  });
+}
 
 /* ---------- مقایسه ---------- */
 function drawCompareChart(hover){
@@ -3010,6 +3064,7 @@ async function safePipeline(data,onP){
   safe('structure',renderStructure);safe('list',renderList);
   if(!(document.activeElement&&document.activeElement.id==='q'))safe('controls',renderControls);
   safe('backtest',renderBacktest);safe('portfolio',renderPortfolio);safe('compare',renderCompare);
+  ProtectionView.refresh();
   safe('compass',()=>{updateCompass(state.btc.finalScore,state.coins,!state._compassInited);state._compassInited=true;});
   if(state.selected&&state.byId.get(state.selected.id))safe('drawer',()=>openDrawer(state.selected.id));
   try{checkAlerts();}catch(e){}
@@ -3158,16 +3213,35 @@ function btRerun(){
  $('#btTh').onchange=e=>{state.btUI.th=+e.target.value;btRerun();};
  $('#btRisk').onchange=e=>{state.btUI.risk=+e.target.value;btRerun();};
 
- $('#secPortfolio').addEventListener('click',e=>{
-  if(e.target.closest('[data-pfadd]')){pfAdd();return;}
+ $('#secPortfolio').addEventListener('click',async e=>{
+  if(e.target.closest('[data-pfadd]')){await pfAdd();return;}
+  const protect=e.target.closest('[data-pfprotect]');
+  if(protect){pfProtect(protect.dataset.pfprotect);return;}
   const del=e.target.closest('[data-pfdel]');
-  if(del){state.pf=state.pf.filter(p=>p.id!==del.dataset.pfdel);
-    store.set('radar_pf',state.pf);renderPortfolio();toast('از پرتفوی حذف شد','ok');}});
- $('#secPortfolio').addEventListener('change',e=>{
+  if(del){
+    const p=state.pf.find(p=>p.id===del.dataset.pfdel);
+    if(p&&(p.protections||[]).some(RadarProtection.active)){toast('ابتدا پایش طرح فعال را متوقف کنید؛ حذف دارایی فروش محسوب نمی‌شود.','warn');return;}
+    if(p&&(p.protections||[]).length&&!confirm('این دارایی و تاریخچهٔ حفاظتی آن حذف شود؟ این عمل فروش نیست.'))return;
+    const result=await pfCommit(rows=>{
+      const i=rows.findIndex(p=>p.id===del.dataset.pfdel);
+      if(i<0)return;
+      if((rows[i].protections||[]).some(RadarProtection.active))throw new Error('طرح فعال دارد؛ حذف ممکن نیست.');
+      rows.splice(i,1);
+    });
+    if(!result.ok){toast(esc(result.error),'err');return;}
+    pfChanged();toast('از پرتفوی حذف شد','ok');}});
+ $('#secPortfolio').addEventListener('change',async e=>{
   const inp=e.target.closest('[data-pfqty]');
-  if(inp){const q=parseFloat(inp.value);const p=state.pf.find(x=>x.id===inp.dataset.pfqty);
-    if(p&&q>0){p.qty=q;store.set('radar_pf',state.pf);renderPortfolio();}
-    else{inp.value=p?p.qty:'';toast('تعداد باید عددی مثبت باشد','warn');}}});
+  if(inp){
+    const q=parseFloat(inp.value);
+    const result=await pfCommit(rows=>{
+      const p=rows.find(x=>x.id===inp.dataset.pfqty);
+      if(!p||!isFinite(q)||q<=0)throw new Error('تعداد باید عددی مثبت باشد.');
+      if((p.protections||[]).some(RadarProtection.active))throw new Error('تعداد طرح فعال را از مسیر ثبت خروج تغییر دهید.');
+      p.qty=q;
+    });
+    if(!result.ok)toast(esc(result.error),'warn');
+    pfChanged();}});
 
  $('#alAdd').addEventListener('click',()=>{
   const id=$('#alCoin').value,c=state.byId.get(id);
@@ -3415,6 +3489,7 @@ $('#delta').addEventListener('click',e=>{
     try{if(matchMedia('(prefers-color-scheme: light)').matches)return 'day';}catch(e){}
     return 'night';})(),false);
   setupPwa();
+  setupProtection();
   try{state.proxy=await probeProxy();}catch(e){state.proxy=false;}
   buildCompass();
   setTimeout(()=>{if(!bootDone)bootRecover('بارگذاری بیش از حد طول کشید (شبکه یا محدودیت نرخ) — ادامه با داده شبیه‌سازی');},25000);
