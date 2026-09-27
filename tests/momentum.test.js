@@ -283,13 +283,17 @@ test('universe summary counts passes and keeps FOMO out of the approval list', (
 });
 
 test('terminal page wires an independent screener and does not feed it the buy score', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const html = require('./helpers/page.js').readPage();
   assert.match(html, /momentum\.js/);
   assert.match(html, /id="secMomentum"/);
   assert.match(html, /function renderMomentum\(/);
   assert.match(html, /price_change_percentage=1h,24h,7d,30d,200d,1y/);
   assert.equal(html.includes('RadarMomentum.screen(c.finalScore'), false);
+  // The service worker must precache the screener so the section works
+  // offline. Assert on the asset list, not on the cache version string —
+  // bumping the version is routine and must not break this test.
   const sw = fs.readFileSync(path.join(__dirname, '..', 'sw.js'), 'utf8');
   assert.match(sw, /momentum\.js/);
-  assert.match(sw, /radar-shell-v3-momentum/);
+  assert.match(sw, /momentum\.css/);
+  assert.match(sw, /radar-shell-v\d/);
 });

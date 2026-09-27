@@ -1,0 +1,26 @@
+/* پایش شبانه‌روزی — همان توکن‌های ترمینال، بدون رنگ یا فاصلهٔ جدید */
+.live-hint{font-size:var(--fs-xs);color:var(--faint);line-height:1.9}
+
+#liveRoot .protect-error{margin:12px 16px}
+#liveRoot .empty{color:var(--muted);font-size:var(--fs-sm);text-align:center}
+
+/* جدولِ دفترچه: اعداد باید در یک ستونِ LTR هم‌راستا بخوانده شوند */
+#liveRoot .table{font-size:var(--fs-sm)}
+#liveRoot .table th,#liveRoot .table td{padding:7px 10px;white-space:nowrap}
+#liveRoot .table td:nth-child(2){white-space:normal}
+#liveRoot .table tbody tr:hover{background:var(--panel2)}
+
+/* نشانی که روی دکمهٔ وضعیت می‌نشیند */
+.pulse-chip:hover{border-color:var(--amber);color:var(--text)}
+.pulse-chip:disabled{opacity:.55;cursor:wait}
+
+#lvToken,#lvSpace{font-family:var(--mono)}
+#liveRoot .protect-fields{margin-top:0}
+#liveRoot code{
+  font-family:var(--mono);font-size:.92em;background:var(--bg2);
+  border:1px solid var(--line);border-radius:var(--r-xs);padding:1px 5px;
+}
+
+@media(max-width:760px){
+  #liveRoot .ov{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

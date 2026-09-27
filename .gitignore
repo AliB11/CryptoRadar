@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
+.radar-state/
+.vercel/
+node_modules/

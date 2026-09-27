@@ -1,4 +1,16 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/pulse",
+      "schedule": "0 3 * * *"
+    }
+  ],
+  "functions": {
+    "api/pulse.js": { "maxDuration": 60 },
+    "api/state.js": { "maxDuration": 30 },
+    "api/proxy.js": { "maxDuration": 20 }
+  },
   "headers": [
     {
       "source": "/sw.js",
@@ -10,6 +22,18 @@
       "source": "/index.html",
       "headers": [
         { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    },
+    {
+      "source": "/(terminal|live|momentum|protection).(js|css)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
       ]
     }
   ]
