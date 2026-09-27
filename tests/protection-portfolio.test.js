@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const E = require('../protection.js');
-const html = fs.readFileSync(require('node:path').join(__dirname, '..', 'index.html'), 'utf8');
+const html = require('./helpers/page.js').readPage();
 const start = html.indexOf('async function pfCommit(');
 const commitCode = html.slice(start, html.indexOf('\nfunction pfChanged(', start));
 const NOW = Date.parse('2026-09-22T12:00:00Z');
@@ -15,6 +15,9 @@ function harness(rows) {
   let raw = JSON.stringify(rows), writes = 0, failWrites = false, queue = Promise.resolve();
   const ctx = vm.createContext({
     state: { pf: JSON.parse(raw) },
+    // pfCommit notifies the server-monitor bridge on every successful write;
+    // this harness exercises the commit itself, so the bridge is a no-op.
+    liveChanged: () => {},
     localStorage: {
       getItem: () => raw,
       setItem: (_, next) => { if (failWrites) throw new Error('storage full'); raw = next; writes++; }
