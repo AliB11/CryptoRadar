@@ -1,5 +1,5 @@
 /* رادارِ بازار — service worker */
-const CACHE = 'radar-shell-v2-protection';
+const CACHE = 'radar-shell-v3-momentum';
 const SHELL = [
   '/',
   '/index.html',
@@ -7,6 +7,9 @@ const SHELL = [
   '/protection.js',
   '/protection-view.js',
   '/protection.css',
+  '/momentum.js',
+  '/momentum-view.js',
+  '/momentum.css',
   '/icons/icon-192.png',
   '/icons/icon-512.png'
 ];

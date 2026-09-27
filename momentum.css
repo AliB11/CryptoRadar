@@ -1,0 +1,67 @@
+/* Momentum watchlist — same terminal tokens as the rest of CryptoRadar. */
+.mom{display:flex;flex-direction:column;gap:14px}
+.mom-notice{border-inline-start:3px solid var(--amber);padding:10px 12px;background:var(--panel2);border-radius:8px;color:var(--muted);font-size:12px;line-height:1.95}
+.mom-notice b{color:var(--text-soft)}
+.mom-why{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:8px 12px;font-size:12px;color:var(--muted);line-height:1.9}
+.mom-why summary{cursor:pointer;color:var(--amber);font-weight:700}
+.mom-why p{margin-top:8px}
+.mom-env,.mom-levels{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.mom-stat,.mom-levels div{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px 10px;min-width:0}
+.mom-stat span,.mom-levels span{display:block;font-size:10px;color:var(--faint)}
+.mom-stat b,.mom-levels b{display:block;margin-top:3px;font-size:13px;font-family:var(--mono);overflow-wrap:anywhere}
+.mom-env p{grid-column:1/-1;margin:0;font-size:11.5px;color:var(--muted);line-height:1.8}
+.mom-counts{display:flex;flex-wrap:wrap;gap:8px}
+.mom-count{border:1px solid var(--line2);border-radius:99px;padding:3px 10px;font-size:11.5px;color:var(--muted);background:var(--panel)}
+.mom-count b{font-family:var(--mono);color:var(--text);font-weight:600}
+.mom-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:4px}
+.mom-head h3{font-size:15px}
+.mom-head span{font-size:11px;color:var(--faint)}
+.mom-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.mom-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 14px 12px;min-width:0}
+.mom-card.approve{border-color:color-mix(in srgb,var(--up) 42%,var(--line))}
+.mom-card.fomo,.mom-card.exit{border-color:color-mix(in srgb,var(--down) 50%,var(--line))}
+.mom-card header{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.mom-card header b{font-size:14px}
+.mom-card header small{display:block;color:var(--faint);font-size:11px}
+.mom-pills{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+.mom-pill{font-size:10.5px;border-radius:99px;padding:2px 8px;border:1px solid var(--line2);color:var(--muted)}
+.mom-pill.approve{color:var(--up);border-color:color-mix(in srgb,var(--up) 45%,var(--line))}
+.mom-pill.fomo,.mom-pill.exit,.mom-pill.high{color:var(--down);border-color:color-mix(in srgb,var(--down) 45%,var(--line))}
+.mom-pill.low{color:var(--up);border-color:color-mix(in srgb,var(--up) 40%,var(--line))}
+.mom-pill.medium{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,var(--line))}
+.mom-quote{display:flex;flex-wrap:wrap;gap:10px 14px;margin:8px 0;font-size:12px;color:var(--muted)}
+.mom-filters{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
+.mom-filter{font-size:11px;line-height:1.65;padding:6px 8px;border-radius:8px;background:var(--bg2);border-inline-start:3px solid var(--line2)}
+.mom-filter.pass{border-inline-start-color:var(--up)}
+.mom-filter.fail{border-inline-start-color:var(--down)}
+.mom-filter i{display:block;color:var(--faint);font-style:normal;font-size:10px}
+.mom-note{font-size:11.5px;color:var(--muted);line-height:1.85;margin:6px 0}
+.mom-note.warn{color:var(--text-soft)}
+.mom-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.mom-table{width:100%;border-collapse:collapse;font-size:12px}
+.mom-table th,.mom-table td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
+.mom-table th{color:var(--faint);font-weight:600;font-size:10.5px}
+.mom-form{padding:14px;border:1px solid var(--line2);border-radius:14px;background:var(--panel)}
+.mom-form h3{font-size:14px;margin-bottom:4px}
+.mom-form>p{color:var(--muted);font-size:11.5px;margin-bottom:10px}
+.mom-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.mom-fields label,.mom-check{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+.mom-fields input,.mom-fields select{min-width:0;width:100%;background:var(--bg2);color:var(--text);border:1px solid var(--line2);border-radius:7px;padding:8px;font:12px var(--mono)}
+.mom-fields select{font-family:var(--sans);direction:rtl}
+.mom-fields input:focus,.mom-fields select:focus{outline:2px solid var(--amber);outline-offset:2px}
+.mom-check{flex-direction:row;align-items:center;gap:8px;margin-top:10px}
+.mom-check input{accent-color:var(--amber)}
+.mom-form .mom-actions{margin-top:12px}
+.mom-error{color:var(--down);font-size:12px;margin-top:8px}
+.mom-error[hidden]{display:none}
+.mom-empty{padding:16px;border:1px dashed var(--line2);border-radius:12px;color:var(--muted);font-size:12.5px;line-height:1.9}
+.mom-pin{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+.mom-pin small{color:var(--faint)}
+.mom-stale{color:var(--amber)}
+@media(max-width:760px){
+  .mom-env,.mom-levels,.mom-fields,.mom-filters{grid-template-columns:1fr 1fr}
+  .mom-fields{grid-template-columns:1fr 1fr}
+}
+@media(max-width:460px){
+  .mom-levels,.mom-filters,.mom-fields{grid-template-columns:1fr}
+}

@@ -28,6 +28,12 @@
   "categories": ["finance", "utilities"],
   "shortcuts": [
     {
+      "name": "واچ‌لیست مومنتوم",
+      "short_name": "مومنتوم",
+      "url": "/#secMomentum",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
       "name": "سیگنال‌ها",
       "short_name": "سیگنال",
       "url": "/#secSignals",

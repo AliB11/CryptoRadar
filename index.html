@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0a0d10">
-<meta name="description" content="ترمینال سیگنال ارزهای دیجیتال: تحلیل تکنیکال ۱۰۰ دارایی برتر، واگرایی RSI، قفل هم‌گرایی هشت‌عاملی، بک‌تست walk-forward، پرتفوی و هشدار قیمت — کاملاً در مرورگر.">
+<meta name="description" content="ترمینال سیگنال ارزهای دیجیتال: تحلیل تکنیکال ۱۰۰ دارایی برتر، واچ‌لیست مومنتوم با فیلتر نقدینگی، واگرایی RSI، قفل هم‌گرایی، بک‌تست و هشدار قیمت — کاملاً در مرورگر.">
 <meta name="color-scheme" content="dark light">
 <meta property="og:title" content="رادارِ بازار — ترمینال سیگنال کریپتو">
 <meta property="og:description" content="تحلیل زنده بازار کریپتو با قطب‌نمای لنگر بیت‌کوین، واگرایی، بک‌تست و رده‌بندی هم‌گرایی.">
@@ -19,6 +19,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="protection.css">
+<link rel="stylesheet" href="momentum.css">
 <title>رادارِ بازار — ترمینال سیگنال کریپتو</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -538,7 +539,7 @@ body.lock{overflow:hidden}
 
 /* ---------- Responsive ---------- */
 @media(max-width:1320px){.top-status{display:none}}
-@media(max-width:1180px){
+@media(max-width:1460px){
   .navpills{display:none}
   .nav-btn{display:grid}
 }
@@ -597,7 +598,7 @@ body.lock{overflow:hidden}
     <div><b>رادارِ بازار</b><span>SIGNAL&nbsp;TERMINAL</span></div>
   </div>
   <nav class="navpills">
-    <a href="#secAnchor">لنگر</a><a href="#secPulse">نبض</a><a href="#secForecast">پیش‌بینی</a><a href="#secTop">برترین‌ها</a><a href="#secStructure">ساختار</a><a href="#secSignals">سیگنال‌ها</a><a href="#secBacktest">بک‌تست</a><a href="#secPortfolio">پرتفوی</a><a href="#secCompare">مقایسه</a><a href="#secQA">تست</a>
+    <a href="#secAnchor">لنگر</a><a href="#secPulse">نبض</a><a href="#secForecast">پیش‌بینی</a><a href="#secTop">برترین‌ها</a><a href="#secMomentum">مومنتوم</a><a href="#secStructure">ساختار</a><a href="#secSignals">سیگنال‌ها</a><a href="#secBacktest">بک‌تست</a><a href="#secPortfolio">پرتفوی</a><a href="#secCompare">مقایسه</a><a href="#secQA">تست</a>
   </nav>
   <div class="top-status" id="topStatus"></div>
   <div class="top-actions">
@@ -625,12 +626,13 @@ body.lock{overflow:hidden}
     <a href="#secPulse">۰۲ · نبض بازار</a>
     <a href="#secForecast">۰۳ · پیش‌بینی</a>
     <a href="#secTop">۰۴ · قفل هم‌گرایی</a>
-    <a href="#secStructure">۰۵ · ساختار</a>
-    <a href="#secSignals">۰۶ · سیگنال‌ها</a>
-    <a href="#secBacktest">۰۷ · بک‌تست</a>
-    <a href="#secPortfolio">۰۸ · پرتفوی</a>
-    <a href="#secCompare">۰۹ · مقایسه</a>
-    <a href="#secQA">۱۰ · تست صحت</a>
+    <a href="#secMomentum">۰۵ · واچ‌لیست مومنتوم</a>
+    <a href="#secStructure">۰۶ · ساختار</a>
+    <a href="#secSignals">۰۷ · سیگنال‌ها</a>
+    <a href="#secBacktest">۰۸ · بک‌تست</a>
+    <a href="#secPortfolio">۰۹ · پرتفوی</a>
+    <a href="#secCompare">۱۰ · مقایسه</a>
+    <a href="#secQA">۱۱ · تست صحت</a>
   </nav>
 </div>
 
@@ -698,9 +700,18 @@ body.lock{overflow:hidden}
     <div class="sl-grid" id="slGrid"></div>
   </section>
 
+  <section class="reveal" id="secMomentum">
+    <div class="sec-head">
+      <span class="sec-no">05</span><h2 class="sec-title">واچ‌لیست مومنتوم</h2>
+      <div class="sec-badges"><div class="sbadge"><i data-lucide="crosshair"></i>تأیید این دور <b id="momCount">—</b></div></div>
+      <p class="sec-desc">غربال پروژه‌های دارای مومنتوم، نه سیگنال خرید مارکت: سابقهٔ حداقل یک ماه، حجم ۲۴ساعته حداقل ۴۰ میلیون دلار، رشد ۲۴ساعته بین ۱۰٪ و ۵۰٪، و نبود نشانهٔ بوست جعلی. ورود پیشنهادی همیشه پولبک است. جهت بیت‌کوین و دامیننس سطح ریسک را عوض می‌کند؛ نظرسنجی ترس و طمع معیار قبول نیست.</p>
+    </div>
+    <div id="momentumRoot"></div>
+  </section>
+
   <section class="reveal" id="secStructure">
     <div class="sec-head">
-      <span class="sec-no">05</span><h2 class="sec-title">ساختار بازار</h2>
+      <span class="sec-no">06</span><h2 class="sec-title">ساختار بازار</h2>
       <p class="sec-desc">ماتریس هم‌حرکتی ۲۰ دارایی بزرگ بازار و نقشه‌ی ریسک-بازده همه‌ی ۱۰۰ دارایی — کلیک روی هر سلول ماتریس، آن دو ارز را در بخش «مقایسه» کنار هم می‌گذارد؛ کلیک روی هر حباب، تحلیل همان دارایی را باز می‌کند.</p>
     </div>
     <div class="struct-grid">
@@ -719,7 +730,7 @@ body.lock{overflow:hidden}
 
   <section class="reveal" id="secSignals">
     <div class="sec-head">
-      <span class="sec-no">06</span><h2 class="sec-title">جدول سیگنال‌ها</h2>
+      <span class="sec-no">07</span><h2 class="sec-title">جدول سیگنال‌ها</h2>
       <p class="sec-desc">۱۰۰ دارایی برتر بازار با ده سنجه‌ی تکنیکال روی داده‌ی ساعتی ۷ روز اخیر، همراه با «رده‌ی هم‌گرایی» هر سیگنال. ستاره = دیده‌بان شخصی؛ کلیک روی ردیف = تحلیل کامل با <b>واگرایی مثبت/منفی</b>، کارنامه‌ی قفل، استراتژی اجرا و بک‌تست همان دارایی.</p>
     </div>
     <div class="controls" id="controls"></div>
@@ -735,7 +746,7 @@ body.lock{overflow:hidden}
 
   <section class="reveal" id="secBacktest">
     <div class="sec-head">
-      <span class="sec-no">07</span><h2 class="sec-title">بک‌تست استراتژی</h2>
+      <span class="sec-no">08</span><h2 class="sec-title">بک‌تست استراتژی</h2>
       <div class="sec-badges"><div class="sbadge"><i data-lucide="flask-round"></i>نوع آزمون <b>walk-forward</b></div></div>
       <p class="sec-desc">استراتژی واقعی همین ترمینال، میله‌به‌میله روی ۷ روز داده‌ی ساعتی اجرا می‌شود: ورود هنگام عبور امتیاز از آستانه، حد ضرر ATRمحور، خروج ۵۰٪ در هدف اول با انتقال حد ضرر به نقطه‌ی ورود، هدف دوم، توقف زمانی ۴۸ ساعته و سایزینگ کسری-ثابت (ریسک درصدی از سرمایه در هر معامله). آستانه و ریسک را تغییر دهید تا اثرشان را روی منحنی سرمایه ببینید.</p>
     </div>
@@ -765,7 +776,7 @@ body.lock{overflow:hidden}
 
   <section class="reveal" id="secPortfolio">
     <div class="sec-head">
-      <span class="sec-no">08</span><h2 class="sec-title">پرتفوی شبیه‌سازی‌شده</h2>
+      <span class="sec-no">09</span><h2 class="sec-title">پرتفوی شبیه‌سازی‌شده</h2>
       <p class="sec-desc">دارایی‌ها و بهای خریدتان را ثبت کنید تا ارزش، سود/زیان و سهم هر دارایی محاسبه شود. تعداد، بهای خرید و طرح حفاظت فقط در مرورگر شما (localStorage) ذخیره می‌شود؛ برای دریافت قیمت حفاظتی، فقط شناسهٔ دارایی به سرویس داده ارسال می‌شود.</p>
     </div>
     <div class="listwrap" style="padding:18px" id="pfWrap"></div>
@@ -774,7 +785,7 @@ body.lock{overflow:hidden}
 
   <section class="reveal" id="secCompare">
     <div class="sec-head">
-      <span class="sec-no">09</span><h2 class="sec-title">مقایسه‌ی دوسویه</h2>
+      <span class="sec-no">10</span><h2 class="sec-title">مقایسه‌ی دوسویه</h2>
       <p class="sec-desc">دو دارایی را کنار هم بگذارید: عملکرد نرمال‌شده (پایه ۱۰۰)، همبستگی، بتای نسبی و اختلاف عملکرد — از ماتریس ساختار بازار هم می‌توانید مستقیم به اینجا بیایید.</p>
     </div>
     <div class="listwrap" style="padding:18px">
@@ -790,7 +801,7 @@ body.lock{overflow:hidden}
 
   <section class="reveal" id="secQA">
     <div class="sec-head">
-      <span class="sec-no">10</span><h2 class="sec-title">تست صحت عملکرد</h2>
+      <span class="sec-no">11</span><h2 class="sec-title">تست صحت عملکرد</h2>
       <div class="sec-badges"><div class="sbadge"><i data-lucide="flask-conical"></i>وضعیت خودآزمایی <b id="qaBadge">—</b></div></div>
       <p class="sec-desc">مجموعه‌ی تست‌های واحد روی موتور اندیکاتورها، آمار و آشکارساز واگرایی، و تست‌های یکپارچگی روی داده‌ی زنده، بک‌تست، رده‌بندی هم‌گرایی و توکن‌های تم — در هر بارگذاری یک‌بار خودکار اجرا می‌شود و با دکمه‌ی زیر قابل تکرار است.</p>
     </div>
@@ -836,6 +847,7 @@ body.lock{overflow:hidden}
       <tr><td><span class="khint">R</span></td><td>به‌روزرسانی فوری داده</td></tr>
       <tr><td><span class="khint">?</span></td><td>همین راهنما</td></tr>
       <tr><td><span class="khint">Esc</span></td><td>بستن پنل، هشدار یا جست‌وجو</td></tr>
+      <tr><td><span class="khint">M</span></td><td>پرش به واچ‌لیست مومنتوم</td></tr>
       <tr><td><span class="khint">J</span> / <span class="khint">K</span></td><td>حرکت بین ردیف‌های جدول سیگنال</td></tr>
       <tr><td><span class="khint">Enter</span></td><td>باز کردن تحلیل ردیف انتخاب‌شده</td></tr>
     </table>
@@ -845,6 +857,8 @@ body.lock{overflow:hidden}
 
 <script src="protection.js"></script>
 <script src="protection-view.js"></script>
+<script src="momentum.js"></script>
+<script src="momentum-view.js"></script>
 <script>
 'use strict';
 /* ============================================================
@@ -1094,7 +1108,7 @@ const state={coins:[],btc:null,global:null,live:false,proxy:null,lastUpdate:null
   btcOpts:{ema12:true,ema26:true,boll:true,piv:true,div:true},
   drOpts:{ema12:false,ema26:true,boll:true,div:true},
   hoverBtc:null,hoverDr:null,byId:new Map(),dots:new Map(),refreshing:false,
-  fng:null,trending:[],gainers:[],losers:[],stru:null,perf:0,
+  fng:null,trending:[],gainers:[],losers:[],stru:null,perf:0,momentumExtra:[],
   ohlc:new Map(),drCandle:false,cmp:{a:null,b:null},_rrPts:[],_rrH:null,_btH:null,_sig:null,
   wl:new Set(store.get('radar_wl',[])),
   pf:(()=>{const rows=store.get('radar_pf',[]);return Array.isArray(rows)?rows:[];})(),
@@ -1166,7 +1180,7 @@ function rerenderAll(){
   safe('structure',renderStructure);safe('list',renderList);
   if(!(document.activeElement&&document.activeElement.id==='q'))safe('controls',renderControls);
   safe('backtest',renderBacktest);safe('portfolio',renderPortfolio);safe('compare',renderCompare);
-  safe('footer',renderFooter);
+  safe('momentum',renderMomentum);safe('footer',renderFooter);
   safe('compass',()=>updateCompass(state.btc.finalScore,state.coins,false));
   if(state.selected&&$('#drawer').classList.contains('on'))safe('drawer',()=>renderDrawer());
   icons();
@@ -1826,19 +1840,34 @@ function confNotes(c){
 
 /* ---------- داده‌ها ---------- */
 const STABLES=new Set(['usdt','usdc','dai','fdusd','tusd','usde','pyusd','busd','usdd','frax','usds','susd','usdp','gho','usd1','usdg','rlusd','usdb','usdx','eurc','usdy','usdf','buidl']);
+const MOMENTUM_SKIP=new Set(['wrapped-bitcoin','weth','wrapped-eeth','staked-ether','rocket-pool-eth','coinbase-wrapped-btc','lido-staked-ether','wrapped-steth']);
+function numOrNull(v){if(v==null||v==='')return null;const n=+v;return Number.isFinite(n)?n:null;}
+function leveragedInstrument(id,sym){
+  const s=String(sym||'').toUpperCase(),i=String(id||'').toLowerCase();
+  return /(3L|3S|5L|5S)$/.test(s)||(/(BULL|BEAR)$/.test(s)&&s.length>4)||/leveraged/.test(i);
+}
+function marketCoin(x){
+  if(!x||!(+x.current_price>0))return null;
+  const sym=(x.symbol||'').toUpperCase(),id=String(x.id||'');
+  if(!id||STABLES.has(sym.toLowerCase())||/_/.test(sym)||/(tokenized|heloc|wrapped-steth)/i.test(id))return null;
+  const spark=x.sparkline_in_7d&&Array.isArray(x.sparkline_in_7d.price)?x.sparkline_in_7d.price.map(Number).filter(v=>isFinite(v)&&v>0):[];
+  return {id,sym,name:x.name||sym,rank:x.market_cap_rank||0,mcap:x.market_cap||0,vol24:x.total_volume||0,price:+x.current_price,
+    ch1h:numOrNull(x.price_change_percentage_1h_in_currency),
+    ch24api:numOrNull(x.price_change_percentage_24h_in_currency!=null?x.price_change_percentage_24h_in_currency:x.price_change_percentage_24h),
+    ch7d:numOrNull(x.price_change_percentage_7d_in_currency),
+    ch30d:numOrNull(x.price_change_percentage_30d_in_currency),
+    ch200d:numOrNull(x.price_change_percentage_200d_in_currency),
+    ch1y:numOrNull(x.price_change_percentage_1y_in_currency),
+    high24:numOrNull(x.high_24h),low24:numOrNull(x.low_24h),
+    atlDate:typeof x.atl_date==='string'?x.atl_date:null,spark};
+}
 
 async function fetchLive(){
-  const mk=page=>cgGet(`coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d`,80000);
+  const mk=page=>cgGet(`coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d,200d,1y`,80000);
   const [a,b,g]=await Promise.all([mk(1),mk(2).catch(()=>null),
     cgGet('global',80000).catch(()=>null)]);
   const raw=[...(Array.isArray(a)?a:[]),...(Array.isArray(b)?b:[])];
-  const coins=raw.filter(x=>x&&x.current_price!=null&&Array.isArray(x.sparkline_in_7d&&x.sparkline_in_7d.price)&&x.sparkline_in_7d.price.length>=120&&!STABLES.has((x.symbol||'').toLowerCase())&&!/_/.test(x.symbol||'')&&!/(tokenized|heloc|wrapped-steth)/i.test(x.id||''))
-    .map(x=>({id:x.id,sym:(x.symbol||'').toUpperCase(),name:x.name,rank:x.market_cap_rank||0,
-              mcap:x.market_cap||0,vol24:x.total_volume||0,
-              ch1h:isFinite(+x.price_change_percentage_1h_in_currency)?+x.price_change_percentage_1h_in_currency:null,
-              ch30d:isFinite(+x.price_change_percentage_30d_in_currency)?+x.price_change_percentage_30d_in_currency:null,
-              spark:x.sparkline_in_7d.price.map(Number).filter(v=>isFinite(v)&&v>0)}))
-    .filter(x=>x.spark.length>=120).slice(0,100);
+  const coins=raw.map(marketCoin).filter(x=>x&&x.spark.length>=120).slice(0,100);
   if(coins.length<50)throw new Error('insufficient');
   const d=(g&&g.data)||{};
   const gl={dom:d.market_cap_percentage&&d.market_cap_percentage.btc,
@@ -1848,6 +1877,71 @@ async function fetchLive(){
             chg24:d.market_cap_change_percentage_24h_usd,
             active:d.active_cryptocurrencies};
   return {coins,global:gl,live:true};
+}
+
+function sparkCh24Of(c){
+  if(c.ch24h!=null&&isFinite(+c.ch24h))return +c.ch24h;
+  const sp=c.spark;
+  if(!sp||sp.length<25)return null;
+  const a=sp[sp.length-1],b=sp[sp.length-25];
+  return a>0&&b>0?(a/b-1)*100:null;
+}
+function momentumInputFrom(c,source){
+  return {id:c.id,symbol:c.sym,name:c.name,price:c.price,
+    ch24:c.ch24api!=null?c.ch24api:sparkCh24Of(c),sparkCh24:sparkCh24Of(c),
+    vol24:c.vol24,mcap:c.mcap||null,ch1h:c.ch1h,ch7d:c.ch7d,ch30d:c.ch30d,ch200d:c.ch200d,ch1y:c.ch1y,
+    high24:c.high24,low24:c.low24,atlDate:c.atlDate,
+    historyDays:source==='simulation'?800:undefined,ageAssumed:source==='simulation',
+    prices:c.spark&&c.spark.length>=48?c.spark:null,
+    trending:(state.trending||[]).some(t=>t.id===c.id),
+    leveraged:leveragedInstrument(c.id,c.sym),source};
+}
+function momentumContext(){
+  const b=state.btc,g=state.global||{};
+  return {now:Date.now(),live:!!state.live,
+    btc:b?{symbol:'BTC',ch24:b.ch24api!=null?b.ch24api:b.ch24h,score:b.finalScore,label:b.label}:null,
+    dominance:g.dom!=null?g.dom:null,marketCh24:g.chg24!=null?g.chg24:null,
+    fearGreed:state.fng?state.fng.value:null};
+}
+function momentumModel(){
+  const source=state.live?'live':'simulation',seen=new Set(),coins=[];
+  const push=c=>{if(!c||!c.id||seen.has(c.id)||MOMENTUM_SKIP.has(c.id))return;seen.add(c.id);coins.push(momentumInputFrom(c,source));};
+  state.coins.forEach(push);(state.momentumExtra||[]).forEach(push);
+  const universeNote=state.live
+    ?(state.momentumExtra&&state.momentumExtra.length?'جهان غربال: ۱۰۰ ارز برتر به‌علاوهٔ پرترافیک‌ترین‌ها بر اساس حجم. نسخه‌های رپ‌شدهٔ لنگر حذف شده‌اند.':'جهان حجم جداگانه دریافت نشد؛ غربال فعلاً فقط روی ۱۰۰ ارز برتر است.')
+    :'حالت شبیه‌سازی — حکم‌ها بازار زنده نیستند و سن پروژه‌ها فرض شده است.';
+  return {board:RadarMomentum.screenAll(coins,momentumContext()),ctx:momentumContext(),universeNote,knownIds:state.coins.map(c=>c.id)};
+}
+function renderMomentum(){
+  if(!window.MomentumView||!MomentumView.ready||!window.RadarMomentum||!state.coins.length)return;
+  try{
+    const model=momentumModel();
+    const badge=$('#momCount');if(badge)badge.textContent=fa(model.board.counts.approved);
+    MomentumView.render(model);
+  }catch(e){console.warn('momentum',e);}
+}
+async function loadMomentumUniverse(){
+  if(!state.live){state.momentumExtra=[];renderMomentum();return;}
+  const base='coins/markets?vs_currency=usd&order=volume_desc&sparkline=true&price_change_percentage=1h,24h,7d,30d,200d,1y';
+  let rows=[];
+  try{
+    const v=await cgGet(base+'&per_page=250&page=1',180000);
+    rows=Array.isArray(v)?v.map(marketCoin).filter(Boolean):[];
+    if(rows.length<20)throw new Error('thin');
+  }catch(e){
+    try{
+      const v=await cgGet(base+'&per_page=100&page=1',180000);
+      rows=Array.isArray(v)?v.map(marketCoin).filter(Boolean):[];
+    }catch(e2){rows=state.momentumExtra||[];}
+  }
+  state.momentumExtra=rows;renderMomentum();
+}
+function setupMomentum(){
+  if(!window.MomentumView||!$('#momentumRoot'))return;
+  MomentumView.mount({element:$('#momentumRoot'),openCoin(id){
+    if(state.byId.has(id))openDrawer(id);
+    else toast('این دارایی در جدول سیگنال ۱۰۰تایی نیست؛ حکم غربال همچنان معتبر است','warn');
+  },toast,icons});
 }
 
 async function loadExtras(){
@@ -2727,7 +2821,7 @@ function renderFooter(){
   const qa=QA.results?` · خودآزمایی موتور: <b>${fa(QA.results.filter(r=>r.ok).length)}/${fa(QA.results.length)}</b>`:'';
   $('#foot').innerHTML=
    `منبع داده: <b>${state.live?(state.proxy?'CoinGecko از طریق پروکسی + alternative.me':'CoinGecko + alternative.me (مستقیم)'):'شبیه‌سازی محلی — اتصال برقرار نشد'}</b> · آخرین به‌روزرسانی: ${N(state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')} ·
-    تحلیل ${N(fa(100))} دارایی · واگرایی قیمت/RSI · رده‌بندی هم‌گرایی ۸ عاملی · بک‌تست درون‌نمونه‌ای walk-forward · تم شب/روز${qa}<br>
+    تحلیل ${N(fa(100))} دارایی · واچ‌لیست مومنتوم · واگرایی قیمت/RSI · رده‌بندی هم‌گرایی ۸ عاملی · بک‌تست درون‌نمونه‌ای walk-forward · تم شب/روز${qa}<br>
     دیده‌بان، پرتفوی، هشدارها و تم فقط در مرورگر شما ذخیره می‌شوند. این ترمینال خروجی الگوریتمیِ تحلیل تکنیکال روی داده‌های تاریخی است و به هیچ عنوان توصیه سرمایه‌گذاری نیست؛ مسئولیت هر معامله با شماست.`;}
 setInterval(()=>{$('#clock').textContent=new Date().toLocaleTimeString('fa-IR',{hour12:false});},1000);
 
@@ -2971,6 +3065,12 @@ function runQA(show){
       return{ok:ts.every(c=>['A+','A','B+'].includes(c.grade)&&c.label!=='NEU'),info:fa(ts.length)+' کارت منتخب'};});
   }
 
+  T('واچ‌لیست مومنتوم','حجم زیر ۴۰ میلیون مستقل از برچسب خرید رد می‌شود',()=>{
+    if(!window.RadarMomentum)return {ok:false,info:'موتور بارگذاری نشد'};
+    const r=RadarMomentum.screen({symbol:'TEST',price:1,ch24:20,vol24:1e6,historyDays:100,source:'manual',label:'BUY2'},{now:Date.now(),btc:{ch24:1,score:20},fearGreed:90});
+    return {ok:r.ok&&r.filters.liquidity.pass===false&&r.verdict!=='approve'&&r.environment.fearGreedIgnored===true,info:r.filters.liquidity.text};
+  });
+
   QA.results=R;QA.ms=performance.now()-t0;
   if(show)renderQA();
   updateQABadge();
@@ -3064,6 +3164,7 @@ async function safePipeline(data,onP){
   safe('structure',renderStructure);safe('list',renderList);
   if(!(document.activeElement&&document.activeElement.id==='q'))safe('controls',renderControls);
   safe('backtest',renderBacktest);safe('portfolio',renderPortfolio);safe('compare',renderCompare);
+  safe('momentum',renderMomentum);
   ProtectionView.refresh();
   safe('compass',()=>{updateCompass(state.btc.finalScore,state.coins,!state._compassInited);state._compassInited=true;});
   if(state.selected&&state.byId.get(state.selected.id))safe('drawer',()=>openDrawer(state.selected.id));
@@ -3071,6 +3172,7 @@ async function safePipeline(data,onP){
   try{if(prev)renderDelta(diffSignals(prev));}catch(e){}
   try{runQA(false);}catch(e){}
   safe('footer',renderFooter);
+  loadMomentumUniverse();
   icons();
   try{applyRoute();}catch(e){}
 }
@@ -3120,6 +3222,7 @@ document.addEventListener('keydown',e=>{
   if((k==='k'||k==='K')&&(e.metaKey||e.ctrlKey)){e.preventDefault();openCmd();return;}
   if(k==='/'&&!e.metaKey&&!e.ctrlKey){e.preventDefault();openCmd();return;}
   if(k==='?'){e.preventDefault();openHelp();return;}
+  if((k==='m'||k==='M')&&!e.metaKey&&!e.ctrlKey){document.getElementById('secMomentum').scrollIntoView({behavior:'smooth'});return;}
   if(k==='t'||k==='T'){$('#themeBtn').click();return;}
   if(k==='r'||k==='R'){if(!e.metaKey&&!e.ctrlKey){$('#refreshBtn').click();}}
   if(k==='j'||k==='J'||k==='k'||k==='ArrowDown'||k==='ArrowUp'){
@@ -3390,6 +3493,7 @@ const SECTIONS=[
   ['secPulse','نبض بازار','بخش'],
   ['secForecast','پیش‌بینی روند','بخش'],
   ['secTop','قفل هم‌گرایی','بخش'],
+  ['secMomentum','واچ‌لیست مومنتوم','بخش'],
   ['secStructure','ساختار بازار','بخش'],
   ['secSignals','جدول سیگنال‌ها','بخش'],
   ['secBacktest','بک‌تست استراتژی','بخش'],
@@ -3490,6 +3594,7 @@ $('#delta').addEventListener('click',e=>{
     return 'night';})(),false);
   setupPwa();
   setupProtection();
+  setupMomentum();
   try{state.proxy=await probeProxy();}catch(e){state.proxy=false;}
   buildCompass();
   setTimeout(()=>{if(!bootDone)bootRecover('بارگذاری بیش از حد طول کشید (شبکه یا محدودیت نرخ) — ادامه با داده شبیه‌سازی');},25000);
