@@ -134,6 +134,22 @@ def _authorized(handler) -> bool:
     return hmac.compare_digest(str(presented), str(token))
 
 
+def interval_sec() -> int:
+    """PULSE_INTERVAL_SEC, clamped — never a 500 because of a typo.
+
+    A bare `int(os.environ[...])` raises on "90s", "" or "abc", and this value
+    is read on every /api/state and /api/pulse request, so one bad environment
+    variable used to take the whole API down with a ValueError instead of just
+    one endpoint complaining. The tick clamps to the same range itself.
+    """
+    raw = os.environ.get("PULSE_INTERVAL_SEC")
+    try:
+        value = int(float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return 90
+    return max(30, min(3600, value))
+
+
 def ttl_for(path: str, src: str) -> int:
     if src == "fng" or path == "search/trending":
         return 600
@@ -335,7 +351,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.command in ("GET", "HEAD"):
             state = _space_state(space)
             payload = {"ok": True, "space": space, "store": "file", "pulse": _pulse(space),
-                       "intervalSec": int(os.environ.get("PULSE_INTERVAL_SEC") or 90)}
+                       "intervalSec": interval_sec()}
             payload.update(_public_state(state))
             pub = os.environ.get("VAPID_PUBLIC_KEY") or ""
             payload["push"] = {"configured": bool(pub), "publicKey": pub}
@@ -363,8 +379,14 @@ class Handler(SimpleHTTPRequestHandler):
             if len(state.get("ledger") or []) > 2000:
                 state["ledger"] = state["ledger"][-2000:]
         elif self.command == "DELETE":
+            # Keep the ledger: an audit trail should survive a reset. Every
+            # branch below falls through to the shared tail that bumps the
+            # version exactly once, so this one must not pre-increment — doing
+            # so made a DELETE jump the version by two and desynchronised a
+            # client that had just read it (its next PUT was then rejected as
+            # a conflict it could not explain).
             keep = state.get("subscriptions") or {}
-            state = {"version": int(state.get("version", 0)) + 1, "updatedAt": int(time.time() * 1000),
+            state = {"version": int(state.get("version", 0)), "updatedAt": int(time.time() * 1000),
                      "portfolio": [], "alerts": [], "ledger": state.get("ledger") or [],
                      "subscriptions": {} if body.get("keepSubscriptions") is False else keep}
         elif self.command == "POST":
@@ -409,7 +431,7 @@ class Handler(SimpleHTTPRequestHandler):
         q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         space = (q.get("space", [""])[0] or os.environ.get("RADAR_SPACE") or "default")
         pulse = _pulse(space)
-        interval = int(os.environ.get("PULSE_INTERVAL_SEC") or 90)
+        interval = interval_sec()
 
         if q.get("status", [""])[0] == "1":
             age = (int(time.time() * 1000) - pulse["lastRun"]) if pulse and pulse.get("lastRun") else None

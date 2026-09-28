@@ -95,7 +95,11 @@
       const who = event.auto === true ? 'اجرای کاغذی خودکار' : 'ثبت دستی خروج';
       return `${who} ${number(event.quantity)} واحد در ${price(event.price)} — سود/زیان ناخالص ${price(event.grossPnl)} (بدون هزینه‌ها)`;
     }
-    if (event.type === 'CLOSED') return 'خروج کامل توسط کاربر ثبت شد.';
+    if (event.type === 'CLOSED') {
+      return event.auto === true
+        ? 'طرح با اجرای کاغذیِ خودکار بسته شد — فروشی انجام نشد و موجودی پرتفوی تغییر نکرده است.'
+        : 'خروج کامل توسط کاربر ثبت شد.';
+    }
     if (event.type === 'CANCELLED') return 'پایش توسط کاربر متوقف شد؛ فروش ثبت نشده است.';
     return event.type;
   }

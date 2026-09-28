@@ -1299,13 +1299,13 @@ function renderShortlist(){
   $('#slGrid').innerHTML=ts.map(c=>{
     const col=gradeCol(c.grade);
     const plain=c.strat?c.strat[0].t.replace(/<[^>]+>/g,''):'';
-    return `<div class="sl-card ${c.grade==='A+'?'aplus':''}" data-id="${c.id}" tabindex="0">
+    return `<div class="sl-card ${c.grade==='A+'?'aplus':''}" data-id="${esc(c.id)}" tabindex="0">
       <div class="sl-lock">${lockSvg(92,c.conf8,c.grade)}</div>
       <div class="sl-body">
         <div class="sl-top"><b>${esc(c.name)}</b><span class="grade-b" style="color:${col};border-color:${col}">${c.grade}</span></div>
         <div class="sl-sub num">${esc(c.sym)} · $${fmtP(c.price)} · <span class="${c.ch24h>=0?'up':'down'}">${fmtPct(c.ch24h)}</span></div>
         ${pillHtml(c)}
-        <canvas class="c-spark" data-id="${c.id}"></canvas>
+        <canvas class="c-spark" data-id="${esc(c.id)}"></canvas>
         <p class="sl-strat">${plain}</p>
         <span class="sl-hint">کلیک: کارنامه‌ی کامل، واگرایی، استراتژی و بک‌تست</span>
       </div></div>`;}).join('');
@@ -1420,11 +1420,11 @@ function renderList(){
   $('#rows').innerHTML=cs.map(c=>{
     const s=c.finalScore,w=Math.abs(s)/2;
     const bar=s>=0?`left:50%;width:${w}%;background:var(--up)`:`right:50%;width:${w}%;background:var(--down)`;
-    return `<div class="row" data-id="${c.id}" tabindex="0">
-      <button class="c-star ${state.wl.has(c.id)?'on':''}" data-wl="${c.id}" title="دیده‌بان"><i data-lucide="star"></i></button>
+    return `<div class="row" data-id="${esc(c.id)}" tabindex="0">
+      <button class="c-star ${state.wl.has(c.id)?'on':''}" data-wl="${esc(c.id)}" title="دیده‌بان"><i data-lucide="star"></i></button>
       <span class="c-rank num">${c.rank||''}</span>
       <div class="c-name"><b>${esc(c.name)}</b><span class="sym">${esc(c.sym)} · ${fmtBig(c.mcap)}</span></div>
-      <canvas class="c-spark" data-id="${c.id}"></canvas>
+      <canvas class="c-spark" data-id="${esc(c.id)}"></canvas>
       <span class="c-price num">$${fmtP(c.price)}</span>
       <span class="c-24 num ${c.ch24h>=0?'up':'down'}">${fmtPct(c.ch24h)}</span>
       <span class="c-7 num ${c.r7>=0?'up':'down'}">${fmtPct(c.r7*100)}</span>
@@ -1777,14 +1777,14 @@ function renderPortfolio(){
       ${rows.length?`<table class="pf-table"><tr><th>دارایی</th><th>تعداد</th><th>بهای خرید</th><th>قیمت فعلی</th><th>ارزش</th><th>سود/زیان</th><th>سهم</th><th>حفاظت</th><th></th></tr>
       ${rows.map((rw,k)=>`<tr>
         <td><b>${esc(rw.name)}</b><span class="sym">${esc(rw.sym)}</span></td>
-        <td><input type="number" min="0" step="any" value="${rw.qty}" data-pfqty="${rw.id}" class="pf-inp" ${(rw.protections||[]).some(RadarProtection.active)?'disabled title="تعداد طرح فعال فقط با ثبت خروج تغییر می‌کند"':''}></td>
+        <td><input type="number" min="0" step="any" value="${rw.qty}" data-pfqty="${esc(rw.id)}" class="pf-inp" ${(rw.protections||[]).some(RadarProtection.active)?'disabled title="تعداد طرح فعال فقط با ثبت خروج تغییر می‌کند"':''}></td>
         <td class="num">$${fmtP(rw.buy)}</td>
         <td class="num">${rw.price!=null?'$'+fmtP(rw.price):'—'}</td>
         <td class="num">${rw.value!=null?fmtBig(rw.value):'—'}</td>
         <td class="num ${rw.pnl==null?'':rw.pnl>=0?'up':'down'}">${rw.pnl==null?'—':fmtPct(rw.pnl)}</td>
         <td><div class="sbar"><i style="${tot>0&&rw.value?`left:0;width:${(rw.value/tot*100).toFixed(1)}%;background:${PAL[k%PAL.length]}`:''}"></i></div></td>
         <td><button class="tool protect-row-btn" data-pfprotect="${esc(rw.id)}">${(rw.protections||[]).some(RadarProtection.active)?'مشاهدهٔ حفاظت':'ثبت حفاظت'}</button></td>
-        <td><button class="pf-del" data-pfdel="${rw.id}" title="حذف"><i data-lucide="trash-2"></i></button></td>
+        <td><button class="pf-del" data-pfdel="${esc(rw.id)}" title="حذف"><i data-lucide="trash-2"></i></button></td>
       </tr>`).join('')}</table>`
       :`<div class="empty">پرتفوی خالی است — از فرم بالا یا دکمه‌ی «افزودن به پرتفوی» در تحلیل هر ارز شروع کنید.</div>`}
     </div>

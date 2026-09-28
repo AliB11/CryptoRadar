@@ -76,8 +76,22 @@
 
   const ready = () => !!(cfg.enabled && cfg.token);
 
+  /**
+   * Every /api/state call must carry the configured namespace.
+   *
+   * This used to be sent only by /api/pulse, so a non-default «فضای نام» wrote
+   * the portfolio into `default` while the ticks evaluated the configured
+   * space: the server never saw a single plan, and paper execution stayed
+   * empty next to a perfectly healthy heartbeat. The namespace is part of the
+   * URL (not the body) because every handler resolves it from the query first.
+   */
+  function withSpace(path) {
+    const separator = String(path).includes('?') ? '&' : '?';
+    return String(path) + separator + 'space=' + encodeURIComponent(cfg.space || 'default');
+  }
+
   async function call(path, options) {
-    const res = await fetch('/api/state' + path, {
+    const res = await fetch('/api/state' + withSpace(path), {
       method: (options && options.method) || 'GET',
       headers: headers(),
       body: options && options.body ? JSON.stringify(options.body) : undefined,
@@ -97,6 +111,35 @@
   function fingerprintOf(portfolio, alerts) {
     return JSON.stringify(portfolio || []).length + ':' + JSON.stringify(portfolio || []) +
            '|' + JSON.stringify(alerts || []);
+  }
+
+  /**
+   * Merge the server's portfolio over the browser's.
+   *
+   * The server copy is authoritative for `protections`: it is the only side
+   * that can record a paper fill while this tab was closed, and losing that
+   * would silently erase the audit trail. The browser stays authoritative for
+   * the row itself — which coins exist, their quantity and cost basis — because
+   * that is what the user edits by hand. Without this split, adopting the
+   * server on a 409 threw away whatever the user had just typed, and without
+   * adopting at all an overnight fill was overwritten by a stale tab.
+   */
+  function mergePortfolio(serverRows, localRows) {
+    const local = Array.isArray(localRows) ? localRows : [];
+    const merged = (Array.isArray(serverRows) ? serverRows : []).map(row => {
+      if (!row || typeof row.id !== 'string') return row;
+      const mine = local.find(candidate => candidate && candidate.id === row.id);
+      if (!mine) return row;
+      const known = new Set((row.protections || []).map(p => p && p.id).filter(Boolean));
+      const extra = (mine.protections || []).filter(p => p && !known.has(p.id));
+      if (!extra.length) return row;
+      return { ...row, protections: [...(row.protections || []), ...extra] };
+    });
+    const seen = new Set(merged.map(row => row && row.id));
+    for (const row of local) {
+      if (row && typeof row.id === 'string' && !seen.has(row.id)) merged.push(row);
+    }
+    return merged;
   }
 
   /* ---------- Web Push ---------- */
@@ -186,10 +229,14 @@
   async function applyServer(data) {
     const t = term();
     if (!t || !t.sync) return;
-    if (Array.isArray(data.portfolio)) await t.sync.applyPortfolio(data.portfolio);
+    const local = localSnapshot();
+    if (Array.isArray(data.portfolio)) {
+      await t.sync.applyPortfolio(mergePortfolio(data.portfolio, local.portfolio));
+    }
     if (Array.isArray(data.alerts)) t.sync.applyAlerts(data.alerts);
     const snap = localSnapshot();
     api.fingerprint = fingerprintOf(snap.portfolio, snap.alerts);
+    renderProtection();
   }
 
   async function pull() {
@@ -222,7 +269,27 @@
     return data;
   }
 
-  async function pushUp() {
+  /**
+   * Uploads are serialized.
+   *
+   * `onLocalChange` fires from inside `applyServer`, and `sync` pushes again
+   * right after a beat, so two PUTs used to race with the same `base`. The
+   * loser got a 409, pulled the server's copy over an edit that had never been
+   * uploaded, and the next cycle re-uploaded it: a version-bumping loop that
+   * also made every other tab re-sync for nothing. Chaining the calls keeps
+   * the write order and lets each one re-read the fingerprint when it runs.
+   */
+  let pushChain = Promise.resolve();
+
+  function pushUp() {
+    if (!ready()) return Promise.resolve(null);
+    const attempt = pushChain.then(pushUpOnce, pushUpOnce);
+    // Never let a failed write poison the chain for the next edit.
+    pushChain = attempt.then(() => {}, () => {});
+    return attempt;
+  }
+
+  async function pushUpOnce() {
     const snap = localSnapshot();
     const next = fingerprintOf(snap.portfolio, snap.alerts);
     if (next === api.fingerprint) return { skipped: 'unchanged' };
@@ -234,6 +301,12 @@
       api.serverVersion = Number(data.version);
       api.fingerprint = next;
       api.lastError = null;
+      // The response *is* the server's current state, so adopt it rather than
+      // leaving the panel showing the copy from before the write: the ledger
+      // and the plan diagnostics would otherwise lag a whole cycle behind.
+      if (data && typeof data === 'object') {
+        api.state = Object.assign({}, api.state, data);
+      }
       return data;
     } catch (error) {
       if (error.status === 409 && error.body) {
@@ -309,7 +382,12 @@
    * @param {{beat?: 'force'|'due'|'never'}} [options] heartbeat policy
    */
   async function sync(reason, options = {}) {
-    if (!ready() || api.busy) return null;
+    // Returning null here used to be indistinguishable from "nothing to do":
+    // a caller that raced the module's own startup sync (or a visibilitychange
+    // that landed mid-cycle) got silence and had no way to tell whether the
+    // portfolio had reached the server. Every exit path now says why.
+    if (!ready()) return { ok: false, skipped: 'not-ready', reason };
+    if (api.busy) return { ok: false, skipped: 'busy', reason };
     api.busy = true;
     try {
       await pull();
@@ -327,13 +405,14 @@
       }
       await pushUp();
       render();
+      return { ok: !api.lastError, skipped: null, reason, state: api.state };
     } catch (error) {
       api.lastError = error && error.message ? error.message : String(error);
       render();
+      return { ok: false, skipped: 'error', reason, error: api.lastError };
     } finally {
       api.busy = false;
     }
-    return api.state;
   }
 
   async function forceTick() {
@@ -461,7 +540,8 @@
     'no-quote': { cls: 'down', label: 'بدون قیمت معتبر', note: 'تا رسیدن قیمت مستقل و تازه، هیچ ارزیابی و اجرایی انجام نمی‌شود.' },
     simulation: { cls: 'off', label: 'آزمایشی', note: 'فقط در مرورگر ارزیابی می‌شود؛ سرور برای دادهٔ شبیه‌سازی منبع قیمت ندارد.' },
     invalid: { cls: 'down', label: 'نامعتبر', note: 'ساختار ذخیره‌شده با قواعد سازگار نیست؛ پایش نمی‌شود.' },
-    closed: { cls: 'off', label: 'بسته‌شده', note: 'خروج ثبت شده است.' },
+    closed: { cls: 'off', label: 'بسته‌شده', note: 'خروج کامل ثبت شده است.' },
+    'paper-closed': { cls: 'up', label: 'بسته‌شده با اجرای کاغذی', note: 'موتورِ کاغذیِ سرور این طرح را بست؛ موجودی پرتفوی تغییر نکرده است.' },
     cancelled: { cls: 'off', label: 'متوقف‌شده', note: 'پایش به‌دستِ کاربر متوقف شده و فروشی ثبت نشده است.' }
   };
   const QUOTE_PROBLEM = {
@@ -511,6 +591,12 @@
         <div id="lvStatusNotes"></div>
       </section>
 
+      <section class="panel live-panel wide" id="lvReady">
+        <div class="panel-head"><h3>آمادگیِ اجرای کاغذی</h3>
+          <span class="hint">هر مانعِ باقی‌مانده، با راهِ رفعش</span></div>
+        <div id="lvReadyBody"></div>
+      </section>
+
       <section class="panel live-panel wide" id="lvWhy">
         <div class="panel-head"><h3>چرا اجرای کاغذی رخ می‌دهد یا نمی‌دهد</h3>
           <span class="hint">وضعیتِ هر طرح از دیدِ سرور، بعد از آخرین تیک</span></div>
@@ -541,6 +627,7 @@
       <section class="panel live-panel wide" id="lvLedgerPanel">
         <div class="panel-head"><h3>دفترچهٔ اجرای کاغذی</h3>
           <span class="hint" id="lvLedgerCount"></span></div>
+        <div class="ov" id="lvLedgerStats"></div>
         <div class="live-tablewrap" id="lvLedgerBody"></div>
         <div class="panel-foot">قیمتِ اجرا برای حد ضررها پایین‌تر از قیمتِ مشاهده‌شده (لغزشِ بدبینانه) و برای اهداف، برابرِ خودِ هدف در نظر گرفته شده است. هیچ سفارشی به صرافی ارسال نمی‌شود.</div>
       </section>
@@ -630,6 +717,127 @@
     }
   }
 
+  /**
+   * «آمادگیِ اجرای کاغذی» — one list that answers the only question that
+   * matters when the ledger stays empty: what, exactly, is still in the way.
+   *
+   * Every line is derived from state that is already on screen somewhere else,
+   * so it can never drift from the panels it summarises. A line is either
+   * satisfied, merely switched off (a legitimate choice), or blocking — and a
+   * blocking line always carries the action that clears it. This is deliberately
+   * not a generic health check: it exists because "the paper engine does
+   * nothing" has a dozen unrelated causes that all look identical from the
+   * outside.
+   */
+  function readiness() {
+    const pulse = api.state && api.state.pulse;
+    const summary = (pulse && pulse.lastSummary) || {};
+    const states = Array.isArray(summary.planStates) ? summary.planStates : [];
+    const plans = (api.state && api.state.portfolio || []).reduce(
+      (n, row) => n + ((row.protections || []).length), 0);
+    const live = states.filter(p => p.mode !== 'simulation');
+    const watching = states.filter(p => p.state === 'watching').length;
+    const noQuote = states.filter(p => p.state === 'no-quote').length;
+    const pending = states.filter(p => p.state === 'pending').length;
+    const attempts = Number(summary.quoteAttempts) || 0;
+    const fresh = Number(summary.quotes) || 0;
+    const subs = (api.state && api.state.subscriptionCount) || 0;
+
+    const rows = [];
+    // `critical` marks the checks that must be satisfied for a fill to be booked
+    // at all. The rest are advisory: a missing VAPID key or an empty watchlist
+    // changes what you are told, not whether the engine runs.
+    const add = (state, label, detail, action, critical = false) =>
+      rows.push({ state, label, detail, action, critical });
+
+    if (!cfg.token) {
+      add('bad', 'توکنِ پایش وارد نشده', 'سرور بدون RADAR_TOKEN هیچ وضعیتی را می‌پذیرد؛ نه پرتفوی شما را می‌بیند و نه طرحی را می‌سنجد.', 'توکن را در «تنظیمات اتصال» ذخیره کنید.', true);
+    } else {
+      add('ok', 'توکنِ پایش ذخیره است', 'مرورگر با این توکن به سرور وصل می‌شود.');
+    }
+
+    if (!cfg.enabled) {
+      add('off', 'پایشِ سرور خاموش است', 'با خاموش‌بودنِ این کلید هیچ تیکی اجرا نمی‌شود، حتی اگر زمان‌سنجِ بیرونی здоров باشد.', 'کلیدِ «پایش شبانه‌روزی سرور» را روشن کنید.', true);
+    } else {
+      add('ok', 'پایشِ سرور روشن است', 'هر ' + fa(api.intervalSec) + ' ثانیه یک چرخهٔ ارزیابی.');
+    }
+
+    if (api.lastError) {
+      add('bad', 'همگام‌سازی با سرور ناموفق است', api.lastError, 'اتصال و توکن را بررسی کنید.', true);
+    } else if (ready()) {
+      add('ok', 'همگام‌سازی سالم است', 'آخرین پاسخ ' + (api.lastSyncAt ? ageText(Date.now() - api.lastSyncAt) + ' پیش' : 'همین حالا') + '.');
+    }
+
+    if (plans === 0) {
+      add('warn', 'هیچ طرح حفاظتی روی سرور نیست', 'بدون طرح، اجرای کاغذی موضوعیت ندارد: تیک چیزی برای ارزیابی ندارد.', 'در بخش «پرتفوی» کنار دارایی روی «ثبت حفاظت» بزنید.');
+    } else {
+      add('ok', fa(plans) + ' طرح حفاظتی روی سرور ثبت است',
+        watching + ' در حال پایش' + (pending ? ' · ' + fa(pending) + ' هشدار باز' : '') +
+        (noQuote ? ' · ' + fa(noQuote) + ' بدون قیمت' : ''));
+    }
+
+    if (live.length && attempts && fresh === 0) {
+      add('bad', 'قیمتِ مستقل به سرور نمی‌رسد', 'بدون قیمتِ تازه و معتبر، هیچ شرط خروجی ارزیابی و ثبت نمی‌شود.', 'اتصالِ سرور به CoinGecko (یا پروکسیِ RADAR_PROXY_ORIGIN) را بررسی کنید.', true);
+    } else if (noQuote) {
+      add('warn', fa(noQuote) + ' طرح قیمتِ معتبر ندارد', 'قیمتِ کهنه، مفقود یا نامعتبر مبنای هشدار تازه نیست؛ حد حفاظتی حفظ می‌شود.', 'اگر ادامه داشت، شناسهٔ دارایی و منبع قیمت را بررسی کنید.');
+    }
+
+    if (pulse && pulse.autoExec === false) {
+      add('off', 'اجرای خودکارِ کاغذی خاموش است', 'PAPER_AUTO_EXEC=false یعنی شرط‌ها فقط هشدار می‌شوند و در دفترچه ثبت نمی‌شوند.', 'برای ثبتِ خودکار، متغیر را بردارید یا true کنید.', true);
+    }
+
+    if (pulse && pulse.lastError) {
+      add('bad', 'آخرین تیکِ سرور خطا داد', String(pulse.lastError.detail || '').slice(0, 120), 'جزئیات را در «وضعیتِ موتور» ببینید.', true);
+    }
+
+    if (!api.pushKey) {
+      add('off', 'کلیدِ VAPID تنظیم نشده', 'بدون آن سرور نمی‌تواند دستگاهِ خاموش را بیدار کند؛ اجرای کاغذی اما ثبت می‌شود.', 'با node tools/vapid.mjs کلید بسازید و در متغیرهای محیطی بگذارید.');
+    } else if (!subs) {
+      add('warn', 'هیچ دستگاهی اعلان فشاری ندارد', 'اجرای کاغذی ثبت می‌شود، اما وقتی صفحه باز نیست خبری نمی‌شنوید.', 'کلیدِ «اعلان فشاری» را در بخشِ کنترل بزنید.');
+    }
+
+    return rows;
+  }
+
+  const READY_STATE = {
+    ok: { cls: 'up', mark: '✓', label: 'آماده' },
+    warn: { cls: 'late', mark: '!', label: 'ناقص' },
+    off: { cls: 'off', mark: '–', label: 'خاموش' },
+    bad: { cls: 'down', mark: '×', label: 'مانع' }
+  };
+
+  function renderReadiness() {
+    const host = el('lvReadyBody');
+    if (!host) return;
+    const rows = readiness();
+    // The verdict is decided by the critical checks only: "ناقص" must never
+    // appear next to a switch that is off, because that reads as "it should be
+    // working" while nothing can possibly be booked.
+    const blocked = rows.filter(r => r.critical && r.state !== 'ok');
+    const partial = rows.filter(r => !r.critical && r.state === 'warn').length;
+    const blocking = blocked.length;
+    const verdict = blocking
+      ? { cls: 'down', text: fa(blocked.length) + ' مانعِ اجرای کاغذی' }
+      : partial
+        ? { cls: 'late', text: 'اجرا فعال است — ' + fa(partial) + ' نکتهِ بهبود' }
+        : { cls: 'up', text: 'آمادهٔ اجرای کاغذی' };
+
+    host.innerHTML = `<div class="live-ready-verdict ${verdict.cls}">
+        <i class="live-dot ${verdict.cls}"></i><b>${esc(verdict.text)}</b>
+        <span>${esc(fa(rows.filter(r => r.state === 'ok').length))} از ${esc(fa(rows.length))} شرط برقرار است</span>
+      </div>
+      <ul class="live-ready">` +
+      rows.map(r => {
+        const info = READY_STATE[r.state] || READY_STATE.off;
+        return `<li class="${info.cls}">
+          <i class="live-ready-mark" aria-hidden="true">${info.mark}</i>
+          <div><b>${esc(r.label)}</b>
+            <span>${esc(r.detail)}</span>
+            ${r.action ? `<em>${esc(r.action)}</em>` : ''}</div>
+        </li>`;
+      }).join('') + '</ul>';
+  }
+
   function renderWhy() {
     const host = el('lvWhyBody');
     if (!host) return;
@@ -654,6 +862,8 @@
         const info = PLAN_STATE[p.state] || { cls: 'off', label: p.state, note: '' };
         const autoOff = pulse.autoExec === false;
         const detail = p.state === 'no-quote' ? (QUOTE_PROBLEM[p.problem] || p.problem || '')
+          : p.state === 'paper-closed'
+            ? 'اجرای کاغذی در ' + price(p.price) + ' ثبت شد و طرح بسته شد؛ موجودی پرتفوی دست‌نخورده است.'
           : (autoOff && p.state === 'pending'
             ? 'اجرای خودکارِ کاغذی خاموش است (PAPER_AUTO_EXEC=false)؛ این هشدار تا روشن‌کردنِ آن در دفترچه ثبت نمی‌شود.'
             : info.note);
@@ -702,13 +912,54 @@
       </tr>`).join('') + '</tbody></table>';
   }
 
+  /**
+   * Ledger totals. A list of fills answers "what happened"; the running net and
+   * the hit rate answer "is this model any good", which is the only reason to
+   * keep a paper ledger at all. Both are computed from the same rows that are
+   * rendered, so they can never disagree with the table.
+   */
+  function ledgerTotals(ledger) {
+    const rows = Array.isArray(ledger) ? ledger : [];
+    const net = rows.reduce((sum, f) => sum + (Number(f.grossPnl) || 0), 0);
+    const winners = rows.filter(f => Number(f.grossPnl) > 0).length;
+    const adopted = rows.filter(f => f.adopted).length;
+    return {
+      count: rows.length,
+      net,
+      winners,
+      losers: rows.length - winners,
+      adopted,
+      winRate: rows.length ? winners / rows.length : null,
+      // Slippage actually paid, not the configured number: the difference
+      // between the observed and modelled price on every booked fill.
+      slippagePaid: rows.reduce((sum, f) => {
+        const observed = Number(f.observedPrice), price = Number(f.price);
+        if (!(observed > 0) || !(price > 0)) return sum;
+        return sum + Math.abs(observed - price) / observed;
+      }, 0) / Math.max(1, rows.length)
+    };
+  }
+
   function renderLedger() {
     const body = el('lvLedgerBody');
-    if (body) body.innerHTML = ledgerRows((api.state && api.state.ledger) || []);
+    const ledger = (api.state && api.state.ledger) || [];
+    if (body) body.innerHTML = ledgerRows(ledger);
     const count = el('lvLedgerCount');
     if (count) {
-      const fills = ((api.state && api.state.ledger) || []).length;
-      count.textContent = fa(fills) + ' ثبت — شبیه‌سازی، بدون سفارش واقعی';
+      const totals = ledgerTotals(ledger);
+      count.textContent = totals.count
+        ? fa(totals.count) + ' ثبت — شبیه‌سازی، بدون سفارش واقعی'
+        : 'شبیه‌سازی، بدون سفارش واقعی';
+    }
+    const stats = el('lvLedgerStats');
+    if (stats) {
+      const t = ledgerTotals(ledger);
+      stats.innerHTML = t.count
+        ? `<div class="ov-cell ${t.net >= 0 ? 'up' : 'down'}"><span>سود/زیان خالصِ کاغذی</span><b>${esc(price(t.net))}</b><em>ناخالص، بدون کارمزد</em></div>` +
+          `<div class="ov-cell"><span>نرخ برد</span><b>${esc(t.winRate == null ? '—' : fa(Math.round(t.winRate * 100)) + '٪')}</b><em>${esc(fa(t.winners))} برد · ${esc(fa(t.losers))} باخت</em></div>` +
+          `<div class="ov-cell"><span>لغزشِ متوسطِ پرداختی</span><b>${esc(fa((t.slippagePaid * 10000).toFixed(1)))} bps</b><em>مدلِ بدبینانهٔ خروج</em></div>` +
+          `<div class="ov-cell"><span>اجرا از هشدارِ ایستاده</span><b>${esc(fa(t.adopted))}</b><em>از ${esc(fa(t.count))} ثبت</em></div>`
+        : '<div class="empty">هنوز اجرای کاغذی ثبت نشده است؛ آمارها با اولین ثبت پر می‌شوند.</div>';
     }
   }
 
@@ -722,6 +973,16 @@
     if (space && space.value !== cfg.space) space.value = cfg.space;
   }
 
+  /**
+   * The protection cards are another module's DOM, and a server tick is one of
+   * the few things that can close a plan without the user touching this page.
+   * Re-rendering them here keeps the two halves from disagreeing until the
+   * protection panel's own 90-second poll happens to come around.
+   */
+  function renderProtection() {
+    try { if (root.ProtectionView && root.ProtectionView.render) root.ProtectionView.render(); } catch (_) {}
+  }
+
   function render() {
     const host = ensureShell();
     if (!host) return;
@@ -729,9 +990,11 @@
     renderChip();
     renderControl();
     renderStatus();
+    renderReadiness();
     renderWhy();
     renderLedger();
     renderSettings();
+    renderProtection();
   }
 
   function flash(message, bad) {

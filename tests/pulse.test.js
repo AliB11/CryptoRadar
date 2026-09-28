@@ -668,8 +668,47 @@ test('the heartbeat carries the diagnostics the page renders', async () => {
   assert.equal(pulse.lastSummary.fills, 1);
   assert.equal(pulse.lastSummary.adopted, 1);
   assert.equal(pulse.lastSummary.planTotal, 1);
-  assert.deepEqual(pulse.lastSummary.planStates.map(p => p.state), ['closed']);
+  // A plan the paper engine closed is reported as such, with the fill it was
+  // closed at: the page has to be able to say "your holdings were not touched"
+  // instead of the generic "an exit was recorded", which reads as a sale.
+  assert.deepEqual(pulse.lastSummary.planStates.map(p => p.state), ['paper-closed']);
+  assert.equal(pulse.lastSummary.planStates[0].reason, 'STOP_LOSS');
+  assert.ok(pulse.lastSummary.planStates[0].price > 0);
   assert.equal(pulse.autoExec, true);
+});
+
+test('describePlans separates a plan the user sold from one the paper engine closed', () => {
+  const now = Date.now();
+  const sold = Protection.create({
+    id: 'p-sold', coinId: 'bitcoin', symbol: 'BTC', mode: 'live',
+    entryPrice: 100, quantity: 1, enteredAt: now - 3600000, stop: 90
+  }, now - 3600000);
+  const flagged = Protection.evaluate(sold, { coinId: 'bitcoin', price: 80, asOf: now - 1000, source: 'live' }, now - 500);
+  const byUser = Protection.recordExecution(flagged.position, { signalId: flagged.position.pending.id, quantity: 1, price: 80 }, now);
+
+  const paper = Protection.create({
+    id: 'p-paper', coinId: 'ethereum', symbol: 'ETH', mode: 'live',
+    entryPrice: 100, quantity: 1, enteredAt: now - 3600000, stop: 90
+  }, now - 3600000);
+  const paperFlagged = Protection.evaluate(paper, { coinId: 'ethereum', price: 80, asOf: now - 1000, source: 'live' }, now - 500);
+  const byEngine = Protection.recordExecution(paperFlagged.position,
+    { signalId: paperFlagged.position.pending.id, quantity: 1, price: 79.9, auto: true }, now);
+
+  const rows = monitor.describePlans({
+    portfolio: [
+      { id: 'bitcoin', sym: 'BTC', protections: [byUser] },
+      { id: 'ethereum', sym: 'ETH', protections: [byEngine] }
+    ]
+  }, {}, now);
+  assert.deepEqual(rows.map(r => r.state), ['closed', 'paper-closed']);
+  assert.equal(rows[1].price, 79.9);
+  // Both must still be recognised as valid, closed plans.
+  assert.equal(Protection.validPosition(byUser), true);
+  assert.equal(Protection.validPosition(byEngine), true);
+  // And the history must attribute the closure correctly.
+  assert.equal(byUser.events.at(-1).reason, 'USER_RECORDED_EXIT');
+  assert.equal(byEngine.events.at(-1).reason, 'PAPER_AUTO_EXIT');
+  assert.equal(byEngine.events.at(-1).auto, true);
 });
 
 function concat(enc, ...arrays) {

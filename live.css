@@ -20,7 +20,7 @@
 .live-seg{display:flex;gap:var(--sp-2);flex-wrap:wrap}
 
 /* کارت‌هایی که محتوای‌شان (جدول/گرید) خودش لبه دارد: پنل فقط قاب می‌گیرد */
-#lvStatus,#lvWhy,#lvLedgerPanel{padding:0;overflow:hidden}
+#lvStatus,#lvReady,#lvWhy,#lvLedgerPanel{padding:0;overflow:hidden}
 #lvStatusGrid{margin:0;border-inline:0;border-block:0;border-radius:0}
 #lvStatusNotes .protect-error{margin:var(--sp-3) var(--card-pad) 0}
 #lvStatusNotes .protect-error:last-child{margin-bottom:var(--sp-4)}
@@ -95,3 +95,45 @@
   #lvStatusGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .live-row{align-items:flex-start}
 }
+
+/* ---------- آمادگیِ اجرای کاغذی ---------- */
+/* یک فهرستِ کوتاه که می‌گوید چه چیزی مانعِ اجراست و چه کاری آن را برمی‌دارد.
+   رنگ‌ها از توکن‌های موجود‌اند؛ نشانه‌ها متنی‌اند تا بدون رنگ هم خوانا بمانند. */
+.live-ready-verdict{
+  display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap;
+  padding:var(--sp-3) var(--card-pad);border-bottom:1px solid var(--line);
+  font-size:var(--fs-sm);
+}
+.live-ready-verdict b{font-weight:800}
+.live-ready-verdict span{color:var(--faint);font-size:var(--fs-xs)}
+.live-ready-verdict.up{border-inline-start:3px solid var(--up)}
+.live-ready-verdict.late{border-inline-start:3px solid var(--amber)}
+.live-ready-verdict.down{border-inline-start:3px solid var(--down)}
+
+.live-ready{list-style:none;padding:var(--sp-2) 0 var(--sp-3)}
+.live-ready li{
+  display:flex;gap:var(--sp-3);align-items:flex-start;
+  padding:var(--sp-2) var(--card-pad);
+}
+.live-ready li + li{border-top:1px dashed var(--line)}
+.live-ready-mark{
+  flex:none;width:16px;height:16px;border-radius:50%;margin-top:2px;
+  display:grid;place-items:center;font-size:9px;font-weight:800;font-style:normal;
+  font-family:var(--sans);line-height:1;
+}
+.live-ready li.up .live-ready-mark{background:color-mix(in srgb,var(--up) 20%,transparent);color:var(--up)}
+.live-ready li.late .live-ready-mark{background:color-mix(in srgb,var(--amber) 20%,transparent);color:var(--amber)}
+.live-ready li.down .live-ready-mark{background:color-mix(in srgb,var(--down) 20%,transparent);color:var(--down)}
+.live-ready li.off .live-ready-mark{background:var(--panel2);color:var(--faint)}
+.live-ready b{display:block;font-size:var(--fs-sm);font-weight:700}
+.live-ready span{display:block;font-size:var(--fs-xs);color:var(--muted);line-height:1.9;max-width:74ch}
+.live-ready em{
+  display:block;font-style:normal;font-size:var(--fs-xs);color:var(--amber);
+  margin-top:2px;
+}
+.live-ready em::before{content:'← ';opacity:.7}
+
+/* ---------- آمارِ دفترچه ---------- */
+#lvLedgerStats{border-block-end:1px solid var(--line)}
+#lvLedgerStats .ov-cell{padding:var(--sp-3) var(--card-pad)}
+#lvLedgerStats .empty{padding:var(--sp-4) var(--card-pad);text-align:start}

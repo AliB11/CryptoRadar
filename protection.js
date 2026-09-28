@@ -364,7 +364,14 @@
       next.status = 'CLOSED';
       next.closedAt = clock;
       next.pending = null;
-      append(next, 'CLOSED', clock, { reason: 'USER_RECORDED_EXIT' });
+      // Who closed it matters as much as the fact that it is closed: a paper
+      // fill booked by the server never touched the user's holdings, so the
+      // history line must not claim the user sold. Same event type, different
+      // attribution.
+      append(next, 'CLOSED', clock, {
+        reason: input.auto === true ? 'PAPER_AUTO_EXIT' : 'USER_RECORDED_EXIT',
+        auto: input.auto === true
+      });
     } else if (next.pending.quantity <= quantityTolerance(next.pending.quantity, amount)) {
       if (next.pending.reason === 'TARGET_1') {
         next.target1Completed = true;
