@@ -1,16 +1,86 @@
-/* پایش شبانه‌روزی — همان توکن‌های ترمینال، بدون رنگ یا فاصلهٔ جدید */
+/* پایش زنده — همان توکن‌های ترمینال، بدون رنگ یا فاصلهٔ جدید */
 .live-hint{font-size:var(--fs-xs);color:var(--faint);line-height:1.9}
 
-#liveRoot .protect-error{margin:12px 16px}
-#liveRoot .empty{color:var(--muted);font-size:var(--fs-sm);text-align:center}
+/* چیدمانِ بخش: دو ستونِ کارت که روی صفحه‌های باریک یکی می‌شوند. جدول‌ها و
+   پنل‌های پهن تمام عرض می‌گیرند تا اسکرول افقی فقط داخل خودشان بماند. */
+.live-panels{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:var(--sp-4);align-items:start;margin-top:var(--sp-4);
+}
+.live-panel.wide{grid-column:1/-1}
+@media(max-width:900px){ .live-panels{grid-template-columns:1fr} }
 
-/* جدولِ دفترچه: اعداد باید در یک ستونِ LTR هم‌راستا بخوانده شوند */
+.live-body{padding:var(--sp-4) var(--card-pad);display:flex;flex-direction:column;gap:var(--sp-4)}
+.live-row{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:var(--sp-3) var(--sp-4);flex-wrap:wrap;
+}
+.live-row b{font-size:var(--fs-base);font-weight:700}
+.live-note{display:block;font-size:var(--fs-xs);color:var(--faint);line-height:2;max-width:62ch;margin-top:2px}
+.live-seg{display:flex;gap:var(--sp-2);flex-wrap:wrap}
+
+/* کارت‌هایی که محتوای‌شان (جدول/گرید) خودش لبه دارد: پنل فقط قاب می‌گیرد */
+#lvStatus,#lvWhy,#lvLedgerPanel{padding:0;overflow:hidden}
+#lvStatusGrid{margin:0;border-inline:0;border-block:0;border-radius:0}
+#lvStatusNotes .protect-error{margin:var(--sp-3) var(--card-pad) 0}
+#lvStatusNotes .protect-error:last-child{margin-bottom:var(--sp-4)}
+#lvWhyBody .live-hint{margin:0;padding:var(--sp-2) var(--card-pad) var(--sp-4)}
+#lvWhyBody .live-tally{border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+#lvWhy #lvWhyBody > .empty{padding:26px 18px}
+#lvWhyBody,#lvLedgerBody{overflow-x:auto}
+#lvLedgerBody .empty{padding:26px 18px}
+
+/* کلیدِ روشن/خاموشِ پایش — همان زبانِ دکمه‌های «tool»، فقط با حالتِ واضح */
+.live-switch{
+  display:inline-flex;align-items:center;gap:8px;flex:none;cursor:pointer;
+  font-size:var(--fs-sm);font-family:var(--sans);color:var(--muted);
+  background:var(--panel2);border:1px solid var(--line2);border-radius:99px;
+  padding-block:5px;padding-inline:6px 12px;transition:all .2s;
+}
+.live-switch .knob{
+  width:12px;height:12px;border-radius:50%;background:var(--faint);flex:none;
+  transition:background .2s,box-shadow .2s;
+}
+.live-switch.on{border-color:color-mix(in srgb,var(--up) 55%,transparent);color:var(--text)}
+.live-switch.on .knob{background:var(--up);box-shadow:0 0 0 4px color-mix(in srgb,var(--up) 14%,transparent)}
+
+.live-tally{
+  display:flex;flex-wrap:wrap;gap:var(--sp-2) var(--sp-5);
+  padding:var(--sp-3) var(--card-pad);
+  font-size:var(--fs-sm);color:var(--muted);
+}
+.live-tally b{font-family:var(--mono);color:var(--text)}
+.live-problems{padding:var(--sp-3) var(--card-pad);border-top:1px solid var(--line)}
+.live-problems>b{font-size:var(--fs-sm);color:var(--amber)}
+.live-problems ul{margin:var(--sp-2) 0 0;padding-inline-start:18px;color:var(--muted);font-size:var(--fs-xs);line-height:2}
+.live-problems li::marker{color:var(--faint)}
+
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--faint);margin-inline-end:7px}
+.live-dot.up{background:var(--up)} .live-dot.down{background:var(--down)}
+.live-dot.late{background:var(--amber)} .live-dot.off{background:var(--faint)}
+.live-mode{
+  font-size:var(--fs-2xs);color:var(--faint);border:1px solid var(--line2);
+  border-radius:99px;padding:1px 6px;margin-inline-start:6px;
+}
+
+/* وقتی کاربر روی نشانگرِ نوارِ بالا کلیک می‌کند، کارتِ کنترل باید پیدا شود */
+.live-flash{animation:liveflash 1.6s ease-out}
+@keyframes liveflash{
+  0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--amber) 45%,transparent)}
+  60%{box-shadow:0 0 0 10px color-mix(in srgb,var(--amber) 0%,transparent)}
+  100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--amber) 0%,transparent)}
+}
+
+#liveRoot .empty{color:var(--muted);font-size:var(--fs-sm);text-align:center}
+#liveRoot .panel-foot{font-size:var(--fs-xs)}
+
+/* جدولِ دفترچه و جدولِ وضعیتِ طرح‌ها: اعداد باید در یک ستون هم‌راستا خوانده شوند */
 #liveRoot .table{font-size:var(--fs-sm)}
 #liveRoot .table th,#liveRoot .table td{padding:7px 10px;white-space:nowrap}
 #liveRoot .table td:nth-child(2){white-space:normal}
 #liveRoot .table tbody tr:hover{background:var(--panel2)}
 
-/* نشانی که روی دکمهٔ وضعیت می‌نشیند */
+/* نشانگرِ وضعیت روی دکمهٔ نوار بالا */
 .pulse-chip:hover{border-color:var(--amber);color:var(--text)}
 .pulse-chip:disabled{opacity:.55;cursor:wait}
 
@@ -22,5 +92,6 @@
 }
 
 @media(max-width:760px){
-  #liveRoot .ov{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #lvStatusGrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .live-row{align-items:flex-start}
 }

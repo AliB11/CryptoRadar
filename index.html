@@ -50,7 +50,8 @@
   </div>
   <div class="top-status" id="topStatus"></div>
   <div class="top-actions">
-    <button id="pulseBtn" class="pulse-chip off" title="وضعیت پایشِ شبانه‌روزیِ سرور">
+    <button id="pulseBtn" class="pulse-chip off" role="switch" aria-checked="false"
+            title="پایش شبانه‌روزی سرور — برای روشن/خاموش‌کردن کلیک کنید">
       <i class="dot"></i><span id="pulseLabel">پایش سرور</span><b id="pulseAge">—</b>
     </button>
     <button id="densityBtn" class="theme-btn" aria-label="تغییر تراکم نمایش" title="تراکم نمایش"><i data-lucide="rows-3"></i></button>
@@ -98,7 +99,6 @@
       <p class="sec-desc">خلاصهٔ یک‌نگاهِ وضعیت بازار و سلامتِ سامانه. اعدادِ این بخش در هر چرخه بازسازی می‌شوند و با بخش‌های پایین‌تر هم‌منبع‌اند.</p>
     </div>
     <div class="ov" id="ovGrid"></div>
-    <div id="liveRoot"></div>
   </section>
 
   <section class="reveal" id="secAnchor">
@@ -247,12 +247,13 @@
     <div class="protection" id="protectionWrap" aria-label="حفاظت سرمایه و خروج از خرید"></div>
   </section>
 
-  <section class="reveal" id="secLive" aria-label="پایش شبانه‌روزی">
+  <section class="reveal" id="secLive" aria-label="پایش زنده">
     <div class="sec-head">
-      <span class="sec-no">10</span><h2 class="sec-title">پایش شبانه‌روزی</h2>
+      <span class="sec-no">10</span><h2 class="sec-title">پایش زنده</h2>
       <div class="sec-badges"><div class="sbadge"><i data-lucide="server"></i>چرخه <b id="liveCycle">—</b></div></div>
-      <p class="sec-desc">این بخش وضعیتِ موتورِ پایشِ سمت‌سرور را نشان می‌دهد: آخرین تیک، بعدی، اعلان‌های فشاری و دفترچهٔ اجرای کاغذی. پایشِ سمت‌سرور مستقل از بازماندنِ این صفحه کار می‌کند.</p>
+      <p class="sec-desc">همهٔ تنظیماتِ «لایو بودنِ» رادار اینجاست: روشن/خاموش‌کردنِ پایشِ سرور، منبع دادهٔ ترمینال (زنده یا شبیه‌سازی)، توکنِ اتصال، وضعیتِ موتور در هر تیک، دلیلِ اجرا یا عدمِ اجرای کاغذیِ هر طرح، و دفترچهٔ اجرای کاغذی. نشانگرِ «پایش سرور» در نوارِ بالا همان کلیدِ روشن/خاموش است؛ یک کلیک روی آن پایش را روشن یا خاموش می‌کند و اگر توکن ذخیره نشده باشد، شما را به همین بخش می‌آورد.</p>
     </div>
+    <div id="liveRoot"></div>
   </section>
 
   <section class="reveal" id="secCompare">

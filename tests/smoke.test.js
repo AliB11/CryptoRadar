@@ -68,7 +68,7 @@ async function waitForBoot(window) {
   return false;
 }
 
-function boot() {
+function boot(options = {}) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, {
     url: 'http://localhost/',
@@ -76,6 +76,12 @@ function boot() {
     pretendToBeVisual: true
   });
   const { window } = dom;
+
+  // Pre-set preferences the terminal reads during boot (data mode) and let a
+  // test observe the network instead of only forcing it to fail.
+  if (options.dataMode) {
+    window.localStorage.setItem('radar_datamode', JSON.stringify(options.dataMode));
+  }
 
   window.HTMLCanvasElement.prototype.getContext = canvasStub;
   window.matchMedia = window.matchMedia || (q => ({
@@ -86,7 +92,7 @@ function boot() {
   window.IntersectionObserver = class {
     observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
   };
-  window.fetch = () => Promise.reject(new Error('offline'));
+  window.fetch = options.fetch || (() => Promise.reject(new Error('offline')));
   // Timer ownership matters: these must be window timers so window.close()
   // can clean them up, otherwise the test process never exits.
   window.requestAnimationFrame = cb => window.setTimeout(() => cb(Date.now()), 16);
@@ -185,6 +191,17 @@ test('terminal boots without runtime errors and renders every section', { skip: 
   assert.ok($('#pulseBtn'), 'heartbeat chip must exist');
   assert.ok(window.RadarLive, 'RadarLive bridge must be available');
 
+  // The monitoring panel moved into its own section: «نمای کلی» is the market
+  // snapshot only, and every live control lives under «پایش زنده».
+  assert.ok($('#secLive').contains($('#liveRoot')), 'the live panel must live in its own section');
+  assert.ok(!$('#secOverview').contains($('#liveRoot')), 'the overview must not host the live panel');
+  for (const id of ['lvControl', 'lvEnabledSwitch', 'lvDataMode', 'lvStatusGrid', 'lvWhyBody', 'lvToken']) {
+    assert.ok($('#' + id), '#' + id + ' must render inside the live section');
+  }
+  assert.equal($('#pulseBtn').getAttribute('aria-checked'), 'false',
+    'the topbar chip must report the off state as a switch');
+  assert.ok($('#lvWhyBody').textContent.length > 0, 'the diagnostics panel must explain itself');
+
   // Density is a token-only change: switching must not drop content.
   const before = $('#rows').children.length;
   const doc = window.document;
@@ -195,6 +212,82 @@ test('terminal boots without runtime errors and renders every section', { skip: 
   assert.equal(doc.documentElement.dataset.density, 'normal', 'density must cycle back');
   assert.ok($('#foot').innerHTML.includes('منبع داده'), 'footer must render');
 
+  window.close();
+});
+
+test('the open page drives the server heartbeat instead of waiting for a cron', { skip: !JSDOM }, async () => {
+  const { window, errors } = boot();
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(200);
+
+  const calls = [];
+  window.localStorage.setItem('radar_live', JSON.stringify({
+    token: 'test-token', space: 'default', enabled: true
+  }));
+  const STATE = {
+    ok: true, space: 'default', store: 'upstash', version: 4, updatedAt: Date.now(),
+    portfolio: [], alerts: [], ledger: [], subscriptionCount: 0,
+    intervalSec: 90, pulse: { lastRun: null, ticks: 0 }, push: { configured: false }
+  };
+  const TICK = {
+    ok: true, space: 'default', positions: 0, evaluated: 0, signals: [], fills: [],
+    adopted: [], alertsFired: [], problems: [], planStates: [], skipped: null
+  };
+  window.fetch = url => {
+    calls.push(String(url));
+    const body = String(url).includes('/api/pulse') ? TICK : STATE;
+    return Promise.resolve({ ok: true, status: 200, json: async () => body });
+  };
+
+  // live.js reads its config at load time, so pick the token up the way a
+  // reload would.
+  window.eval(fs.readFileSync(path.join(ROOT, 'live.js'), 'utf8'));
+  await window.RadarLive.sync('test');
+  await wait(50);
+
+  assert.ok(calls.some(url => url.includes('/api/pulse')),
+    'a sync must ask the server for a cycle: ' + JSON.stringify(calls));
+  assert.equal(window.RadarLive.lastBeat.ok, true, 'the beat must report success');
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  window.close();
+});
+
+test('a disabled monitor stays quiet and never talks to the server', { skip: !JSDOM }, async () => {
+  const { window, errors } = boot();
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(200);
+
+  let calls = 0;
+  window.localStorage.setItem('radar_live', JSON.stringify({
+    token: 'test-token', space: 'default', enabled: false
+  }));
+  window.fetch = () => { calls++; return Promise.reject(new Error('offline')); };
+  window.eval(fs.readFileSync(path.join(ROOT, 'live.js'), 'utf8'));
+
+  const before = window.RadarTerminal.state.pf.length;
+  await window.RadarLive.sync('test');
+  assert.equal(window.RadarLive.config.enabled, false);
+  assert.equal(calls, 0, 'a disabled monitor must not talk to the server');
+  assert.equal(window.RadarTerminal.state.pf.length, before, 'portfolio untouched');
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  window.close();
+});
+
+test('forced simulation boots without a single upstream request', { skip: !JSDOM }, async () => {
+  const requests = [];
+  const { window, errors } = boot({
+    dataMode: 'simulation',
+    fetch: url => { requests.push(String(url)); return Promise.reject(new Error('offline')); }
+  });
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(200);
+
+  assert.equal(window.RadarTerminal.state.forcedSim, true, 'the mode flag must be visible');
+  assert.equal(window.RadarTerminal.state.live, false);
+  assert.ok(window.RadarTerminal.state.coins.length >= 90, 'simulated universe must be built');
+  assert.deepEqual(requests.filter(url => /coingecko|alternative\.me/.test(url)), [],
+    'forced simulation must not call the upstream: ' + JSON.stringify(requests));
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
   window.close();
 });
 

@@ -321,20 +321,16 @@ async function subscriptionFixture() {
   };
 }
 
-test('the push payload decrypts back to the original message', async () => {
-  const { pair, subscription } = await subscriptionFixture();
-  const message = JSON.stringify({ type: 'protection', title: 'حفاظت سرمایه — BTC' });
-  const sealed = await push.encrypt(subscription, message);
-
-  // Header layout of RFC 8188 §2: salt | record size | key id length | key id
+/**
+ * Decrypt an RFC 8188 aes128gcm body the way the receiving browser does. The
+ * only way to prove what the server actually put on the wire — and therefore
+ * which notification tag it will collapse onto.
+ */
+async function openPayload(pair, subscription, sealed) {
   const salt = sealed.slice(0, 16);
-  const rs = new DataView(sealed.buffer).getUint32(16);
   const idLen = sealed[20];
   const keyId = sealed.slice(21, 21 + idLen);
   const ciphertext = sealed.slice(21 + idLen);
-
-  assert.equal(rs, 4096);
-  assert.equal(idLen, 65, 'an uncompressed P-256 point');
 
   const serverPublic = await crypto.subtle.importKey(
     'raw', keyId, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
@@ -354,8 +350,19 @@ test('the push payload decrypts back to the original message', async () => {
 
   const key = await crypto.subtle.importKey('raw', cek, { name: 'AES-GCM' }, false, ['decrypt']);
   const plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, key, ciphertext));
-  const text = new TextDecoder().decode(plain.slice(0, plain.lastIndexOf(2)));
+  return new TextDecoder().decode(plain.slice(0, plain.lastIndexOf(2)));
+}
 
+test('the push payload decrypts back to the original message', async () => {
+  const { pair, subscription } = await subscriptionFixture();
+  const message = JSON.stringify({ type: 'protection', title: 'حفاظت سرمایه — BTC' });
+  const sealed = await push.encrypt(subscription, message);
+
+  // Header layout of RFC 8188 §2: salt | record size | key id length | key id
+  assert.equal(new DataView(sealed.buffer).getUint32(16), 4096);
+  assert.equal(sealed[20], 65, 'an uncompressed P-256 point');
+
+  const text = await openPayload(pair, subscription, sealed);
   assert.equal(text, message, 'round-trip must be byte-identical');
 });
 
@@ -412,6 +419,257 @@ test('a malformed subscription is reported as gone so it can be dropped', async 
     'hi', { subject: 'mailto:x', publicKey: 'a', privateKey: 'b' });
   assert.equal(result.ok, false);
   assert.equal(result.gone, true);
+});
+
+/* ---------- adoption: the signal the page recorded first ---------- */
+
+/**
+ * The page evaluates on the same 90-second clock while it is open, so it
+ * usually flags a crossed stop first and `evaluate()` then refuses to emit the
+ * same signal again. If the tick only filled events born inside itself, every
+ * plan that crossed while a tab was open would stay flagged-but-unfilled and
+ * the ledger would stay empty forever — the exact symptom this covers.
+ */
+function crossedPlan(overrides = {}) {
+  const now = Date.now();
+  const enteredAt = now - 6 * 3600 * 1000;
+  const position = Protection.create({
+    id: 'pos-adopt', coinId: 'bitcoin', symbol: 'BTC', mode: 'live',
+    entryPrice: 100, quantity: 2, enteredAt, stop: 90,
+    target1: 120, target2: 140, target1Pct: 50, breakeven: true,
+    ...overrides
+  }, enteredAt);
+  const evaluated = Protection.evaluate(position,
+    { coinId: 'bitcoin', price: 85, asOf: now - 1000, source: 'live' }, now);
+  return { now, enteredAt, position: evaluated.position };
+}
+
+async function seedPortfolio(space, position, row = {}) {
+  await seedState(space, {
+    version: 7, updatedAt: Date.now(),
+    portfolio: [{ id: 'bitcoin', sym: 'BTC', name: 'Bitcoin', qty: 2, buy: 100, protections: [position], ...row }],
+    alerts: [], ledger: [], subscriptions: {}
+  });
+}
+
+test('a signal the browser recorded first is adopted and booked as a paper fill', async () => {
+  const { now, position } = crossedPlan();
+  assert.equal(position.pending.reason, 'STOP_LOSS', 'the page flagged the stop');
+  await seedPortfolio('adopt', position);
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch({ bitcoin: { price: 85, asOf: now + 89000 } });
+  let result;
+  try {
+    result = await monitor.tick({ now: now + 90000, space: 'adopt', force: true });
+  } finally { globalThis.fetch = realFetch; }
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.signals.length, 0, 'the server must not invent a second signal');
+  assert.equal(result.fills.length, 1, 'the standing signal must still be executed');
+  assert.equal(result.fills[0].adopted, true);
+  assert.equal(result.adopted.length, 1);
+
+  const state = await monitor.loadState('adopt');
+  assert.equal(state.ledger.length, 1);
+  assert.equal(state.ledger[0].id, 'fill-' + position.pending.id);
+  assert.equal(state.ledger[0].paper, true);
+  assert.equal(state.ledger[0].adopted, true);
+  assert.ok(state.ledger[0].price < 85, 'the pessimistic fill model still applies');
+
+  const saved = state.portfolio[0].protections[0];
+  assert.equal(saved.status, 'CLOSED', 'the paper exit closes the plan');
+  assert.equal(saved.remainingQty, 0);
+  assert.equal(saved.pending, null);
+  const execution = saved.events.filter(e => e.type === 'EXECUTION_RECORDED').pop();
+  assert.equal(execution.auto, true, 'the UI must be able to tell it was not the user');
+});
+
+test('adoption is idempotent: repeated ticks never book the same signal twice', async () => {
+  const { now, position } = crossedPlan();
+  await seedPortfolio('adopt-once', position);
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch({ bitcoin: { price: 85, asOf: now + 89000 } });
+  let second;
+  try {
+    await monitor.tick({ now: now + 90000, space: 'adopt-once', force: true });
+    second = await monitor.tick({ now: now + 180000, space: 'adopt-once', force: true });
+  } finally { globalThis.fetch = realFetch; }
+
+  assert.equal(second.fills.length, 0, 'a closed plan has nothing left to execute');
+  const state = await monitor.loadState('adopt-once');
+  assert.equal(state.ledger.length, 1);
+});
+
+test('an adopted fill is pushed to every device under the same tag as the tab', async () => {
+  const { now, position } = crossedPlan();
+  const { pair, subscription } = await subscriptionFixture();
+  await seedState('adopt-push', {
+    version: 4, updatedAt: now,
+    portfolio: [{ id: 'bitcoin', sym: 'BTC', name: 'Bitcoin', qty: 2, buy: 100, protections: [position] }],
+    alerts: [], ledger: [],
+    subscriptions: { [subscription.endpoint]: { ...subscription, addedAt: now } }
+  });
+
+  const { publicKey, privateKey } = await vapidFixture();
+  const env = {
+    VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
+    VAPID_SUBJECT: process.env.VAPID_SUBJECT
+  };
+  process.env.VAPID_PUBLIC_KEY = publicKey;
+  process.env.VAPID_PRIVATE_KEY = privateKey;
+  process.env.VAPID_SUBJECT = 'mailto:radar@example.test';
+
+  const market = fakeFetch({ bitcoin: { price: 85, asOf: now + 89000 } });
+  const realFetch = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (url, options) => {
+    if (String(url).startsWith('https://push.example.test')) {
+      sent.push({ url: String(url), body: new Uint8Array(options.body) });
+      return { ok: true, status: 201, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return market(url, options);
+  };
+
+  let result;
+  try {
+    result = await monitor.tick({ now: now + 90000, space: 'adopt-push', force: true });
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const [key, value] of Object.entries(env)) {
+      if (value == null) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+
+  assert.equal(result.adopted.length, 1, JSON.stringify(result.adopted));
+  assert.equal(result.push.sent, 1, JSON.stringify(result.push));
+  assert.equal(sent.length, 1, 'the device with the subscription must be woken');
+
+  const message = JSON.parse(await openPayload(pair, subscription, sent[0].body));
+  assert.equal(message.type, 'protection');
+  assert.equal(message.paper, true);
+  assert.equal(message.tag, 'protection-' + position.pending.id,
+    'the push has to collapse onto the tab\'s own notification, not stack on it');
+  assert.ok(/اجرای کاغذی/.test(message.body), message.body);
+});
+
+test('with auto-execution off the standing signal stays open and is never booked', async () => {
+  const { now, position } = crossedPlan();
+  await seedPortfolio('adopt-off', position);
+
+  const previous = process.env.PAPER_AUTO_EXEC;
+  process.env.PAPER_AUTO_EXEC = 'false';
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch({ bitcoin: { price: 85, asOf: now + 89000 } });
+  let result;
+  try {
+    result = await monitor.tick({ now: now + 90000, space: 'adopt-off', force: true });
+  } finally {
+    globalThis.fetch = realFetch;
+    process.env.PAPER_AUTO_EXEC = previous;
+  }
+
+  assert.equal(result.fills.length, 0);
+  assert.equal((await monitor.readPulse('adopt-off')).autoExec, false, 'the heartbeat must say so');
+  const state = await monitor.loadState('adopt-off');
+  assert.equal(state.ledger.length, 0);
+  assert.equal(state.portfolio[0].protections[0].status, 'ACTIVE');
+  assert.equal(state.portfolio[0].protections[0].pending.reason, 'STOP_LOSS');
+});
+
+test('a simulated plan has no server feed and is never paper-executed', async () => {
+  const now = Date.now();
+  const enteredAt = now - 3600000;
+  const position = Protection.create({
+    id: 'pos-sim', coinId: 'sim-btc', symbol: 'BTC', mode: 'simulation',
+    entryPrice: 100, quantity: 1, enteredAt, stop: 90, target1: 120
+  }, enteredAt);
+  const evaluated = Protection.evaluate(position,
+    { coinId: 'sim-btc', price: 85, asOf: now - 1000, source: 'simulation' }, now);
+  await seedState('adopt-sim', {
+    version: 1, updatedAt: now,
+    portfolio: [{ id: 'sim-btc', sym: 'BTC', name: 'Bitcoin (sim)', qty: 1, buy: 100, protections: [evaluated.position] }],
+    alerts: [], ledger: [], subscriptions: {}
+  });
+
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch({ 'sim-btc': { price: 85, asOf: now } });
+  let result;
+  try {
+    result = await monitor.tick({ now: now + 1000, space: 'adopt-sim', force: true });
+  } finally { globalThis.fetch = realFetch; }
+
+  assert.equal(result.fills.length, 0, 'the server must not fill a simulation plan');
+  assert.equal((await monitor.loadState('adopt-sim')).ledger.length, 0);
+  assert.equal(result.planStates[0].state, 'simulation', 'and it must say why');
+});
+
+/* ---------- diagnostics ---------- */
+
+test('describePlans names every reason a plan is or is not being executed', () => {
+  const now = Date.now();
+  const fresh = Protection.create({
+    id: 'p-watch', coinId: 'bitcoin', symbol: 'BTC', mode: 'live',
+    entryPrice: 100, quantity: 1, enteredAt: now - 3600000, stop: 90
+  }, now - 3600000);
+  const closed = Protection.cancel(fresh, now - 1000);
+  const states = monitor.describePlans({
+    portfolio: [{ id: 'bitcoin', sym: 'BTC', protections: [
+      fresh,
+      closed,
+      { ...fresh, id: 'p-broken', version: 0 },
+      Protection.create({
+        id: 'p-sim', coinId: 'sim-eth', symbol: 'ETH', mode: 'simulation',
+        entryPrice: 10, quantity: 1, enteredAt: now - 1000, stop: 9
+      }, now - 1000)
+    ] }]
+  }, { bitcoin: { coinId: 'bitcoin', price: 100, asOf: now, source: 'live' } }, now);
+
+  assert.deepEqual(states.map(s => s.state),
+    ['watching', 'cancelled', 'invalid', 'simulation']);
+  assert.equal(states[0].symbol, 'BTC');
+  // The diagnostics table shows the numbers behind the verdict, so they have
+  // to survive the trip through the heartbeat record.
+  assert.equal(states[0].stop, fresh.stop);
+  assert.equal(states[0].entry, fresh.entryPrice);
+  assert.equal(states[0].remainingQty, fresh.remainingQty);
+});
+
+test('describePlans reports a pending signal and a missing quote instead of silence', () => {
+  const now = Date.now();
+  const { position } = crossedPlan();
+  const states = monitor.describePlans(
+    { portfolio: [{ id: 'bitcoin', sym: 'BTC', protections: [position] }] }, {}, now);
+  assert.equal(states[0].state, 'pending');
+  assert.equal(states[0].reason, 'STOP_LOSS');
+
+  const fresh = Protection.create({
+    id: 'p-quote', coinId: 'ethereum', symbol: 'ETH', mode: 'live',
+    entryPrice: 100, quantity: 1, enteredAt: now - 3600000, stop: 90
+  }, now - 3600000);
+  const missing = monitor.describePlans(
+    { portfolio: [{ id: 'ethereum', sym: 'ETH', protections: [fresh] }] }, {}, now);
+  assert.equal(missing[0].state, 'no-quote');
+  assert.equal(missing[0].problem, 'missing');
+});
+
+test('the heartbeat carries the diagnostics the page renders', async () => {
+  const { now, position } = crossedPlan();
+  await seedPortfolio('diag', position);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fakeFetch({ bitcoin: { price: 85, asOf: now + 89000 } });
+  try {
+    await monitor.tick({ now: now + 90000, space: 'diag', force: true });
+  } finally { globalThis.fetch = realFetch; }
+
+  const pulse = await monitor.readPulse('diag');
+  assert.equal(pulse.lastSummary.fills, 1);
+  assert.equal(pulse.lastSummary.adopted, 1);
+  assert.equal(pulse.lastSummary.planTotal, 1);
+  assert.deepEqual(pulse.lastSummary.planStates.map(p => p.state), ['closed']);
+  assert.equal(pulse.autoExec, true);
 });
 
 function concat(enc, ...arrays) {

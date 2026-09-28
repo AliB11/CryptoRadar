@@ -350,7 +350,11 @@
     if (!finite(grossPnl)) throw new Error('سود/زیان خروج از دامنهٔ قابل محاسبه خارج است.');
     append(next, 'EXECUTION_RECORDED', clock, {
       signalId: next.pending.id, action: next.pending.action,
-      reason: next.pending.reason, quantity: amount, price, grossPnl
+      reason: next.pending.reason, quantity: amount, price, grossPnl,
+      // `auto` marks a fill the paper engine booked without the user: the plan
+      // is closed by the rule, but the real holdings were never touched, so the
+      // UI has to say so instead of implying the user sold.
+      auto: input.auto === true
     });
     next.remainingQty = Math.max(0, next.remainingQty - amount);
     next.pending.quantity = Math.max(0, next.pending.quantity - amount);
@@ -386,6 +390,12 @@
     return next;
   }
 
+  function proxyUrl(params, origin) {
+    const path = '/api/proxy?src=cg&path=coins%2Fmarkets&' + params;
+    const base = typeof origin === 'string' ? origin.replace(/\/+$/, '') : '';
+    return base ? base + path : path;
+  }
+
   async function fetchQuotes(ids, options = {}) {
     const fetcher = options.fetch || globalThis.fetch;
     const clock = typeof options.now === 'function'
@@ -400,7 +410,12 @@
       const params = new URLSearchParams({
         vs_currency: 'usd', ids: batch.join(','), per_page: '250', page: '1', sparkline: 'false'
       });
-      const urls = options.directOnly ? [] : ['/api/proxy?src=cg&path=coins%2Fmarkets&' + params];
+      // The browser resolves `/api/proxy` against the page's origin. A Node
+      // caller (the monitoring tick) has no page, so it may be given one
+      // explicitly (RADAR_PROXY_ORIGIN) to reuse the same cache + 429 fallback
+      // the page relies on; without it the relative URL simply fails and the
+      // direct upstream follows.
+      const urls = options.directOnly ? [] : [proxyUrl(params, options.proxyOrigin)];
       urls.push('https://api.coingecko.com/api/v3/coins/markets?' + params);
       let data = null, failed = 'error';
       for (const url of urls) {
@@ -446,8 +461,20 @@
     return result;
   }
 
+  // The last fill the paper engine booked on its own. The plan is closed by the
+  // rule, not by the user: the position's units are still in the portfolio, so
+  // every surface that shows this plan has to say that out loud.
+  function autoExecuted(position) {
+    if (!position || !Array.isArray(position.events)) return null;
+    for (let index = position.events.length - 1; index >= 0; index--) {
+      const event = position.events[index];
+      if (event && event.type === 'EXECUTION_RECORDED' && event.auto === true) return event;
+    }
+    return null;
+  }
+
   return Object.freeze({
     VERSION, MAX_QUOTE_AGE, create, active, validPosition, quoteProblem,
-    evaluate, recordExecution, cancel, fetchQuotes
+    evaluate, recordExecution, cancel, fetchQuotes, autoExecuted
   });
 });
