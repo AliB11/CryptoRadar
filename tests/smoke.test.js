@@ -252,6 +252,159 @@ test('the open page drives the server heartbeat instead of waiting for a cron', 
   window.close();
 });
 
+test('every /api/state call carries the configured namespace', { skip: !JSDOM }, async () => {
+  // Regression: /api/pulse used to send ?space=… while /api/state sent none, so
+  // a non-default «فضای نام» uploaded the portfolio into `default` and asked for
+  // ticks against the configured space. The server therefore never saw a single
+  // plan, and paper execution stayed empty next to a healthy heartbeat — the
+  // exact symptom of "the paper engine does nothing".
+  const { window, errors } = boot();
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(200);
+
+  const urls = [];
+  const STATE = {
+    ok: true, space: 'alpha', store: 'upstash', version: 3, updatedAt: Date.now(),
+    portfolio: [], alerts: [], ledger: [], subscriptionCount: 0,
+    intervalSec: 90, pulse: { lastRun: null, ticks: 0 }, push: { configured: false }
+  };
+  const TICK = {
+    ok: true, space: 'alpha', positions: 0, evaluated: 0, signals: [], fills: [],
+    adopted: [], alertsFired: [], problems: [], planStates: [], skipped: null
+  };
+  window.localStorage.setItem('radar_live', JSON.stringify({
+    token: 'test-token', space: 'alpha', enabled: true
+  }));
+  window.fetch = url => {
+    const target = String(url);
+    urls.push(target);
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: async () => (target.includes('/api/pulse') ? TICK : STATE)
+    });
+  };
+  window.eval(fs.readFileSync(path.join(ROOT, 'live.js'), 'utf8'));
+  await window.RadarLive.sync('test', { beat: 'force' });
+  await wait(50);
+
+  const stateCalls = urls.filter(url => url.includes('/api/state'));
+  assert.ok(stateCalls.length > 0, 'the state endpoint must be called: ' + JSON.stringify(urls));
+  for (const url of stateCalls) {
+    assert.ok(url.includes('space=alpha'),
+      'a state call without the namespace lands in the wrong space: ' + url);
+  }
+  assert.ok(urls.some(url => url.includes('/api/pulse') && url.includes('space=alpha')),
+    'the beat must keep asking in the same space: ' + JSON.stringify(urls));
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  window.close();
+});
+
+test('the readiness panel names the blocker and its remedy', { skip: !JSDOM }, async () => {
+  // The panel exists because "the paper engine does nothing" has a dozen
+  // unrelated causes that all look identical from the outside. It must name the
+  // critical ones as blockers, not as cosmetic nits, and it must never call a
+  // switched-off monitor "execution is active".
+  const { window, errors } = boot();
+  const ready = () => window.document.getElementById('lvReadyBody').textContent.replace(/\s+/g, ' ');
+  try {
+    assert.ok(await waitForBoot(window), 'boot overlay must finish');
+    await wait(300);
+    assert.ok(window.document.getElementById('lvReady'), 'the readiness panel must render');
+
+    // No token, monitoring off: two blockers, and the verdict must say so.
+    assert.match(ready(), /مانعِ اجرای کاغذی/, 'a blocked setup must not read as ready');
+    assert.match(ready(), /توکنِ پایش وارد نشده/);
+    assert.match(ready(), /پایشِ سرور خاموش است/);
+
+    // Token stored, still off: the switch is the only blocker left.
+    window.localStorage.setItem('radar_live', JSON.stringify({
+      token: 'test-token', space: 'default', enabled: false
+    }));
+    window.fetch = () => Promise.resolve({
+      ok: true, status: 200,
+      json: async () => ({
+        ok: true, version: 0, portfolio: [], alerts: [], ledger: [],
+        subscriptionCount: 0, intervalSec: 90,
+        pulse: { lastRun: Date.now(), ticks: 1, lastSummary: { positions: 0, planStates: [] } },
+        push: { configured: false }
+      })
+    });
+    window.eval(fs.readFileSync(path.join(ROOT, 'live.js'), 'utf8'));
+    await wait(900);
+    assert.match(ready(), /مانعِ اجرای کاغذی/, 'a switched-off monitor is a blocker');
+    assert.doesNotMatch(ready(), /اجرا فعال است/,
+      'execution must never be reported as active while the switch is off');
+
+    assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  } finally {
+    window.close();
+  }
+});
+
+test('a rejected write keeps the server fills and the local edits', { skip: !JSDOM }, async () => {
+  // Regression: on a 409 the page used to adopt the server copy wholesale,
+  // discarding an edit that had never been uploaded. The merge must keep the
+  // server's `protections` (it owns the paper fills) while preserving rows and
+  // plans that exist only in the browser.
+  const { window, errors } = boot();
+  const now = Date.now();
+  const localPlan = window.eval(`RadarProtection.create(${JSON.stringify({
+    id: 'p-local', coinId: 'bitcoin', symbol: 'BTC', mode: 'live',
+    entryPrice: 100, quantity: 1, enteredAt: now - 3600000, stop: 90
+  })}, ${now - 3600000})`);
+  const serverPlan = window.eval(`RadarProtection.create(${JSON.stringify({
+    id: 'p-server', coinId: 'ethereum', symbol: 'ETH', mode: 'live',
+    entryPrice: 200, quantity: 2, enteredAt: now - 3600000, stop: 180
+  })}, ${now - 3600000})`);
+  const STATE = {
+    ok: true, space: 'merge', store: 'upstash', version: 9, updatedAt: Date.now(),
+    portfolio: [{ id: 'ethereum', sym: 'ETH', name: 'Ethereum', qty: 2, buy: 200, protections: [serverPlan] }],
+    alerts: [], ledger: [], subscriptionCount: 0, intervalSec: 90,
+    pulse: { lastRun: null, ticks: 0 }, push: { configured: false }
+  };
+  const writes = [];
+  window.localStorage.setItem('radar_live', JSON.stringify({
+    token: 'test-token', space: 'merge', enabled: true
+  }));
+  // Reads succeed; every write is rejected the way a server that just booked a
+  // paper fill rejects a client that is one version behind.
+  window.fetch = (url, options) => {
+    const target = String(url);
+    if ((options && options.method) === 'PUT') {
+      writes.push(target);
+      return Promise.resolve({
+        ok: false, status: 409,
+        json: async () => ({ ok: false, error: 'version-conflict', ...STATE })
+      });
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => STATE });
+  };
+  try {
+    window.eval(fs.readFileSync(path.join(ROOT, 'live.js'), 'utf8'));
+    await wait(1200);                       // let the module's own sync settle
+
+    // A browser-only edit: a new row plus a plan the server has never seen.
+    await window.eval(`(async () => RadarTerminal.sync.applyPortfolio([
+      { id: 'bitcoin', sym: 'BTC', name: 'Bitcoin', qty: 1, buy: 100, protections: [${JSON.stringify(localPlan)}] },
+      { id: 'solana', sym: 'SOL', name: 'Solana', qty: 5, buy: 20, protections: [] }
+    ]))()`);
+    await wait(400);
+
+    assert.ok(writes.length > 0, 'the local edit must have been uploaded');
+    const byId = new Map(window.RadarTerminal.state.pf.map(r => [r.id, r]));
+    assert.ok(byId.has('ethereum'), 'the server row must survive the conflict');
+    assert.ok(byId.has('solana'), 'a row that exists only locally must not be dropped');
+    assert.ok(byId.has('bitcoin'), 'a plan that exists only locally must not be dropped');
+    assert.equal(byId.get('ethereum').protections[0].id, 'p-server',
+      'the server copy of a shared plan wins: it owns the paper fill');
+    assert.equal(byId.get('bitcoin').protections[0].id, 'p-local',
+      'a locally created plan must not be replaced by the server copy');
+    assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  } finally {
+    window.close();
+  }
+});
+
 test('a disabled monitor stays quiet and never talks to the server', { skip: !JSDOM }, async () => {
   const { window, errors } = boot();
   assert.ok(await waitForBoot(window), 'boot overlay must finish');

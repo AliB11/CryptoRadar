@@ -72,7 +72,7 @@ module.exports = async function handler(req, res) {
       ok: true, space, store: store.backend,
       ...publicState(state),
       pulse: pulse || null,
-      intervalSec: Number(process.env.PULSE_INTERVAL_SEC || 90),
+      intervalSec: monitor.intervalSec(),
       push: process.env.VAPID_PUBLIC_KEY
         ? { configured: true, publicKey: process.env.VAPID_PUBLIC_KEY }
         : { configured: false }

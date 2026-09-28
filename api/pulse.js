@@ -48,13 +48,13 @@ module.exports = async function handler(req, res) {
     // Cheap read used by the status chip and by uptime monitors.
     if (params.get('status') === '1') {
       const pulse = await monitor.readPulse(http.spaceOf(req, null));
-      const staleAfter = Number(process.env.PULSE_INTERVAL_SEC || 90) * 1000 * 4;
+      const staleAfter = monitor.intervalSec() * 1000 * 4;
       const age = pulse && pulse.lastRun ? Date.now() - pulse.lastRun : null;
       http.send(res, 200, {
         ok: true, mode: 'status', store: store.backend, pulse,
         ageMs: age, late: age != null && age > staleAfter,
         nextInMs: pulse && pulse.lastRun
-          ? Math.max(0, pulse.lastRun + Number(pulse.intervalSec || 90) * 1000 - Date.now())
+          ? Math.max(0, pulse.lastRun + monitor.intervalSec(pulse.intervalSec) * 1000 - Date.now())
           : 0
       });
       return;
