@@ -91,7 +91,10 @@
     if (event.type === 'SIGNAL') return `${event.action === 'EXIT_LONG' ? 'هشدار خروج کامل' : 'هشدار کاهش دارایی'} — ${reason} — تعداد ${number(event.quantity)} — قیمت مشاهده‌شده ${price(event.observedPrice)}؛ شرط خروج محقق شده، اما فروش انجام نشده است؛ ادامهٔ افت تضمین نیست`;
     if (event.type === 'STOP_RAISED') return `حد ضرر به ${price(event.stop)} افزایش یافت — ${reason}`;
     if (event.type === 'SUPERSEDED') return 'هشدار قبلی با خروج کامل جایگزین شد — ' + reason;
-    if (event.type === 'EXECUTION_RECORDED') return `ثبت دستی خروج ${number(event.quantity)} واحد در ${price(event.price)} — سود/زیان ناخالص ${price(event.grossPnl)} (بدون هزینه‌ها)`;
+    if (event.type === 'EXECUTION_RECORDED') {
+      const who = event.auto === true ? 'اجرای کاغذی خودکار' : 'ثبت دستی خروج';
+      return `${who} ${number(event.quantity)} واحد در ${price(event.price)} — سود/زیان ناخالص ${price(event.grossPnl)} (بدون هزینه‌ها)`;
+    }
     if (event.type === 'CLOSED') return 'خروج کامل توسط کاربر ثبت شد.';
     if (event.type === 'CANCELLED') return 'پایش توسط کاربر متوقف شد؛ فروش ثبت نشده است.';
     return event.type;
@@ -107,7 +110,10 @@
     const cards = valid.slice().reverse().map(({ row, p }) => {
       const watching = Engine.active(p), quote = quotes[p.coinId];
       const problem = watching ? Engine.quoteProblem(p, quote, Date.now()) : null;
-      const status = p.status === 'CLOSED' ? 'خروج ثبت‌شده' : p.status === 'CANCELLED' ? 'پایش متوقف‌شده' : p.pending ? 'هشدار خروج — منتظر اقدام شما' : 'در حال پایش';
+      const paper = Engine.autoExecuted(p);
+      const status = p.status === 'CLOSED'
+        ? (paper ? 'اجرای کاغذی ثبت‌شده — موجودی دست‌نخورده' : 'خروج ثبت‌شده')
+        : p.status === 'CANCELLED' ? 'پایش متوقف‌شده' : p.pending ? 'هشدار خروج — منتظر اقدام شما' : 'در حال پایش';
       const pending = p.pending;
       return `<article class="protect-card ${pending ? 'protect-pending' : ''}" data-plan-id="${esc(p.id)}">
         <header><div><b>${esc(row.sym)} · ${esc(row.name)}</b><span class="protect-mode">${p.mode === 'live' ? 'واقعی' : 'آزمایشی'} · ${status}</span></div>
@@ -119,6 +125,7 @@
           <div><span>حد ضرر فعال / اولیه</span><b class="num down">${price(p.stop)} / ${price(p.plan.initialStop)}</b></div>
           <div><span>هدف اول / دوم</span><b class="num">${price(p.plan.target1)} / ${price(p.plan.target2)}</b></div>
         </div>
+        ${paper ? `<p class="protect-data down">این طرح را موتورِ کاغذیِ سرور بست (${reasons[paper.reason] || esc(paper.reason)} در ${price(paper.price)}). فروشی رخ نداده و موجودی پرتفوی تغییر نکرده است؛ اگر واقعاً خارج شده‌اید، تعداد این دارایی را در جدول پرتفوی به مقدار واقعی به‌روز کنید.</p>` : ''}
         <p class="protect-meta">ورود: ${date(p.enteredAt)} · شروع پایش: ${date(p.createdAt)}<br>
           سقف مشاهده‌شده از شروع پایش: <span class="num">${price(p.highWater)}</span> ·
           متحرک: ${p.plan.trailPct == null ? 'خاموش' : number(p.plan.trailPct) + '%؛ فعال‌سازی در ' + price(p.plan.trailActivation)} ·
@@ -215,7 +222,7 @@
     options = config; host = config.element;
     host.innerHTML = `<div class="protect-heading"><div><h3>حفاظت سرمایه — خروج از خرید</h3><span data-protection-count></span></div>
       <div><button class="tool on" type="button" data-protection-new>ثبت طرح حفاظت</button> <button class="tool" type="button" data-protection-refresh>بررسی قیمت</button></div></div>
-      <p class="protect-notice">فقط هشدار و ثبت دستی؛ نه فروش خودکار و نه تضمین اجرای حد ضرر. «قطعیت» در این بخش فقط یعنی شرط خروجِ ثبت‌شده با یک قیمت معتبر محقق شده است، نه تضمین ادامهٔ نزول یا قیمت اجرای آینده. بررسی تقریباً هر ۹۰ ثانیه، فقط هنگام اجرای برنامه؛ با بسته‌شدن یا تعلیق مرورگر پایش متوقف می‌شود. دادهٔ بیش از ۵ دقیقه مبنای هشدار تازه نیست. طرح ذخیره‌شده با تغییر سیگنال خرید یا رفرش بازنویسی نمی‌شود.</p>
+      <p class="protect-notice">فقط هشدار و ثبت دستی؛ نه فروش خودکار و نه تضمین اجرای حد ضرر. «قطعیت» در این بخش فقط یعنی شرط خروجِ ثبت‌شده با یک قیمت معتبر محقق شده است، نه تضمین ادامهٔ نزول یا قیمت اجرای آینده. اگر پایشِ سرور روشن باشد (بخش «پایش زنده»)، همان شرط به‌صورت «اجرای کاغذی» در دفترچهٔ سرور ثبت و طرح بسته می‌شود؛ این ثبت شبیه‌سازی است و موجودی پرتفوی را تغییر نمی‌دهد. بررسی تقریباً هر ۹۰ ثانیه، فقط هنگام اجرای برنامه؛ با بسته‌شدن یا تعلیق مرورگر پایش متوقف می‌شود. دادهٔ بیش از ۵ دقیقه مبنای هشدار تازه نیست. طرح ذخیره‌شده با تغییر سیگنال خرید یا رفرش بازنویسی نمی‌شود.</p>
       <p class="protect-error" data-protection-error role="alert" hidden></p>
       <p class="protect-error" data-protection-invalid hidden>بعضی طرح‌های ذخیره‌شده معتبر نیستند و پایش نمی‌شوند؛ دادهٔ آن‌ها حذف نشده است.</p>
       <form class="protect-form" data-plan-form hidden>

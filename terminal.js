@@ -251,7 +251,7 @@ const state={coins:[],btc:null,global:null,live:false,proxy:null,lastUpdate:null
   wl:new Set(store.get('radar_wl',[])),
   pf:(()=>{const rows=store.get('radar_pf',[]);return Array.isArray(rows)?rows:[];})(),
   alerts:store.get('radar_al',[]),
-  bt:null,btUI:{th:25,risk:1}};
+  bt:null,btUI:{th:25,risk:1},forcedSim:false};
 const QA={results:null,ms:0};
 const PAL=['#1fd08a','#e8b04b','#f24d5f','#57cf9b','#ef8b97','#eec27a','#7c8fa3','#5ee3ac','#ff8290','#93a4b8','#c9a227','#3aa76d'];
 
@@ -1161,7 +1161,7 @@ function renderTop(){
     `<span class="tstat"><i class="dot" style="background:${rgTxt[1]}"></i>${rgTxt[0]}</span>`+
     `<span class="tstat">امتیاز بازار ${N((m.score>0?'+':'')+m.score)}</span>`+
     `<span class="tstat">توفیق ${m.winRate?N(Math.round(m.winRate*100)+'%'):'—'}</span>`+
-    `<span class="tstat"><i class="dot" style="background:${state.live?C.up:C.amber}"></i>${state.live?'CoinGecko · زنده':'شبیه‌سازی محلی'}</span>`;
+    `<span class="tstat"><i class="dot" style="background:${state.live?C.up:C.amber}"></i>${state.live?'CoinGecko · زنده':(state.forcedSim?'شبیه‌سازی اجباری':'شبیه‌سازی محلی')}</span>`;
 }
 function renderTicker(){
   const cs=state.coins.slice(0,16);
@@ -1898,7 +1898,7 @@ function renderOverview(){
     cell('ترس و طمع',state.fng?N(state.fng.value):'—',state.fng?fngLabel(state.fng.value):'بدون داده'),
     cell('سیگنال‌های فعال',N(fa(m.active)),`${N(fa(aGrade))} کارتِ رده A/B+ · ${N(fa(m.dist.PRONE||0))} در فشردگی`),
     cell('نرخ توفیقِ بازآزمایی',m.winRate?N(Math.round(m.winRate*100))+'%':'—',`${N(fa(m.sigTot))} نمونه درون‌نمونه‌ای`),
-    cell('منبع داده',state.live?(state.proxy?'پروکسی · زنده':'مستقیم · زنده'):'شبیه‌سازی',
+    cell('منبع داده',state.live?(state.proxy?'پروکسی · زنده':'مستقیم · زنده'):(state.forcedSim?'شبیه‌سازی اجباری':'شبیه‌سازی'),
          state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')
   ].join('');
 }
@@ -2020,12 +2020,15 @@ function checkAlerts(){
 function renderFooter(){
   const qa=QA.results?` · خودآزمایی موتور: <b>${fa(QA.results.filter(r=>r.ok).length)}/${fa(QA.results.length)}</b>`:'';
   $('#foot').innerHTML=
-   `منبع داده: <b>${state.live?(state.proxy?'CoinGecko از طریق پروکسی + alternative.me':'CoinGecko + alternative.me (مستقیم)'):'شبیه‌سازی محلی — اتصال برقرار نشد'}</b> · آخرین به‌روزرسانی: ${N(state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')} ·
+   `منبع داده: <b>${state.live?(state.proxy?'CoinGecko از طریق پروکسی + alternative.me':'CoinGecko + alternative.me (مستقیم)'):(state.forcedSim?'شبیه‌سازی اجباری — بدون درخواست شبکه':'شبیه‌سازی محلی — اتصال برقرار نشد')}</b> · آخرین به‌روزرسانی: ${N(state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')} ·
     تحلیل ${N(fa(100))} دارایی · واچ‌لیست مومنتوم · واگرایی قیمت/RSI · رده‌بندی هم‌گرایی ۸ عاملی · بک‌تست درون‌نمونه‌ای walk-forward · تم شب/روز${qa}<br>
     دیده‌بان، پرتفوی، هشدارها و تم فقط در مرورگر شما ذخیره می‌شوند. این ترمینال خروجی الگوریتمیِ تحلیل تکنیکال روی داده‌های تاریخی است و به هیچ عنوان توصیه سرمایه‌گذاری نیست؛ مسئولیت هر معامله با شماست.`;}
 setInterval(()=>{$('#clock').textContent=new Date().toLocaleTimeString('fa-IR',{hour12:false});},1000);
 
 const REFRESH=90;let cd=REFRESH;let hiddenAge=0;
+// منبع دادهٔ ترمینال: «auto» یعنی تلاش برای داده زنده و برگشت به شبیه‌سازی،
+// «simulation» یعنی شبیه‌سازی اجباری. کلیدش را بخش «پایش زنده» می‌نویسد.
+const DATA_MODE_KEY='radar_datamode';
 function paintCd(){const el=$('#countdown');if(el)el.textContent=cd>0?fmtCd(cd):'…';}
 setInterval(()=>{
   if(document.hidden){
@@ -2383,12 +2386,18 @@ async function doRefresh(silent){
   if(state.refreshing)return;state.refreshing=true;
   $('#refreshBtn').classList.add('busy');
   let data=null;
-  try{data=await fetchLive();}
-  catch(e){
-    if(!silent)toast('اتصال به CoinGecko برقرار نشد؛ محدودیت نرخ یا شبکه','warn');
-    if(!state.live){data=buildSim();}
-    else{toast('به‌روزرسانی ناموفق — داده قبلی حفظ شد','err');}}
-  await loadExtras();
+  if(state.forcedSim){
+    // «شبیه‌سازی اجباری» یعنی هیچ درخواستی به بیرون نمی‌رود — نه قیمت، نه شاخص.
+    state.fng=simFng();state.trending=simTrending();state.momentumExtra=[];
+    data=buildSim();
+  }else{
+    try{data=await fetchLive();}
+    catch(e){
+      if(!silent)toast('اتصال به CoinGecko برقرار نشد؛ محدودیت نرخ یا شبکه','warn');
+      if(!state.live){data=buildSim();}
+      else{toast('به‌روزرسانی ناموفق — داده قبلی حفظ شد','err');}}
+    await loadExtras();
+  }
   if(data){
     try{await safePipeline(data);}
     catch(e){toast('به‌روزرسانی ناقص انجام شد','warn');}
@@ -2855,17 +2864,25 @@ window.RadarTerminal = {
   setTimeout(()=>{const b=$('#bootSkip');if(b&&!bootDone)b.style.display='inline-flex';},7000);
 
   let data=null;
-  setBoot('اتصال به CoinGecko و واکشی ۱۰۰ دارایی برتر…',8);
-  try{
-    data=await Promise.race([fetchLive(),skipP.then(()=>{throw new Error('skip');})]);
-  }catch(e){
-    if(e&&e.message!=='skip')toast('اتصال به CoinGecko برقرار نشد — حالت شبیه‌سازی فعال شد','warn',6000);
+  // «شبیه‌سازی اجباری» از بخش «پایش زنده»: با این تنظیم هیچ درخواستی به
+  // CoinGecko نمی‌رود، حتی اگر شبکه سالم باشد. حالت پیش‌فرض خودکار است.
+  const forcedSim=store.get(DATA_MODE_KEY,'auto')==='simulation';
+  state.forcedSim=forcedSim;
+  setBoot(forcedSim?'حالت شبیه‌سازی اجباری — بدون درخواست شبکه…':'اتصال به CoinGecko و واکشی ۱۰۰ دارایی برتر…',8);
+  if(!forcedSim){
+    try{
+      data=await Promise.race([fetchLive(),skipP.then(()=>{throw new Error('skip');})]);
+    }catch(e){
+      if(e&&e.message!=='skip')toast('اتصال به CoinGecko برقرار نشد — حالت شبیه‌سازی فعال شد','warn',6000);
+    }
   }
   if(!data)data=buildSim();
   state.coins=data.coins;state.global=data.global;state.live=data.live;
 
-  setBoot('دریافت شاخص ترس و طمع و داغ‌ترین جست‌وجوها…',14);
-  const extrasP=loadExtras();
+  setBoot(forcedSim?'ساخت شاخص ترس و طمع و جست‌وجوهای شبیه‌سازی…':'دریافت شاخص ترس و طمع و داغ‌ترین جست‌وجوها…',14);
+  const extrasP=forcedSim
+    ? Promise.resolve().then(()=>{state.fng=simFng();state.trending=simTrending();})
+    : loadExtras();
   await Promise.race([extrasP,sleep(6000)]);
   extrasP.then(()=>{try{if(state.coins.length)renderPulse();}catch(e){}}).catch(()=>{});
 

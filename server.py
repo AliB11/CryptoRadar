@@ -393,13 +393,17 @@ class Handler(SimpleHTTPRequestHandler):
         return self._json(200, payload)
 
     def handle_pulse(self, parsed: urllib.parse.ParseResult) -> None:
-        cron = os.environ.get("CRON_SECRET") or os.environ.get("RADAR_TOKEN") or ""
-        if cron:
+        # CRON_SECRET (Bearer, what Vercel Cron sends) and RADAR_TOKEN (what the
+        # page and tools/pinger.mjs send) are both accepted — same contract as
+        # api/pulse.js. Requiring only CRON_SECRET when it is set would stop an
+        # open tab from driving the heartbeat.
+        secrets = [s for s in (os.environ.get("CRON_SECRET"), os.environ.get("RADAR_TOKEN")) if s]
+        if secrets:
             auth = self.headers.get("Authorization") or ""
             presented = self.headers.get("x-radar-token") or ""
             if auth.lower().startswith("bearer "):
                 presented = presented or auth[7:].strip()
-            if not hmac.compare_digest(str(presented), str(cron)):
+            if not any(hmac.compare_digest(str(presented), str(s)) for s in secrets):
                 return self._json(401, {"error": "unauthorized"})
 
         q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)

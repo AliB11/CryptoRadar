@@ -11,10 +11,13 @@
  *   GET /api/pulse?force=1    run a tick now, ignoring the cadence
  *   GET /api/pulse?status=1   read the heartbeat without running anything
  *
- * Auth: when CRON_SECRET is set it must be presented as
- * `Authorization: Bearer <secret>` — that is exactly what Vercel Cron sends.
- * Otherwise RADAR_TOKEN is required if set. With neither configured the route
- * stays open so a fresh clone can be tried immediately.
+ * Auth: `CRON_SECRET` (as `Authorization: Bearer <secret>`, which is what
+ * Vercel Cron sends) and `RADAR_TOKEN` (as `x-radar-token`) are both accepted.
+ * RADAR_TOKEN already unlocks the whole monitoring state through /api/state, so
+ * letting it also ask for a cycle is not a privilege escalation — and without
+ * it an open tab could not drive the heartbeat whenever CRON_SECRET happens to
+ * be configured. With neither set the route stays open so a fresh clone can be
+ * tried immediately.
  */
 
 const http = require('../lib/http.js');
@@ -29,12 +32,10 @@ module.exports = async function handler(req, res) {
 
   const cronSecret = process.env.CRON_SECRET || '';
   const radarToken = process.env.RADAR_TOKEN || '';
-  if (cronSecret) {
-    if (!http.safeEqual(http.tokenFrom(req), cronSecret)) {
-      http.send(res, 401, { error: 'unauthorized' }); return;
-    }
-  } else if (radarToken) {
-    if (!http.safeEqual(http.tokenFrom(req), radarToken)) {
+  const accepted = [cronSecret, radarToken].filter(Boolean);
+  if (accepted.length) {
+    const presented = http.tokenFrom(req);
+    if (!accepted.some(secret => http.safeEqual(presented, secret))) {
       http.send(res, 401, { error: 'unauthorized' }); return;
     }
   }
