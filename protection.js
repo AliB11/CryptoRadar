@@ -432,7 +432,12 @@
           const response = await fetcher(url, {
             signal: controller.signal, cache: 'no-store', headers: { accept: 'application/json' }
           });
-          if (!response.ok) throw new Error('HTTP ' + response.status);
+          if (!response.ok) {
+            // A reachable proxy's upstream failure is not permission to bypass
+            // it and multiply rate-limited requests from the browser.
+            if (url.includes('/api/proxy') && response.status !== 404) break;
+            throw new Error('HTTP ' + response.status);
+          }
           const cacheHeader = response.headers && typeof response.headers.get === 'function'
             ? response.headers.get('X-Radar-Cache') : null;
           if ((cacheHeader || '').toUpperCase() === 'STALE') {

@@ -26,6 +26,7 @@
 const http = require('../lib/http.js');
 const monitor = require('../lib/monitor.js');
 const store = require('../lib/store.js');
+const SignalPaper = require('../lib/signal-paper.js');
 
 const MAX_ROWS = 400;
 const MAX_ALERTS = 500;
@@ -54,11 +55,14 @@ function publicState(state) {
     portfolio: state.portfolio,
     alerts: state.alerts,
     ledger: state.ledger,
+    signalLedger: state.signalLedger, signalPositions: state.signalPositions,
+    signalResults: state.signalResults || [], signalEvaluationAt: state.signalEvaluationAt || 0,
+    autoExec: process.env.PAPER_AUTO_EXEC !== 'false',
     subscriptionCount: Object.keys(state.subscriptions || {}).length
   };
 }
 
-module.exports = async function handler(req, res) {
+async function handler(req, res) {
   if (req.method === 'OPTIONS') { http.send(res, 204, {}); return; }
   if (!configured(res)) return;
 
@@ -89,7 +93,7 @@ module.exports = async function handler(req, res) {
     const base = Number(body.base);
     // A client that never read the state cannot know whether it is clobbering
     // an overnight fill, so it must send the version it is based on.
-    if (Number.isFinite(base) && base !== state.version) {
+    if (!Number.isInteger(body.base) || base !== state.version) {
       http.send(res, 409, {
         ok: false, error: 'version-conflict',
         detail: 'وضعیتِ سرور جلوتر است (یک تیک یا اجرای کاغذی رخ داده). ابتدا بخوانید.',
@@ -105,7 +109,9 @@ module.exports = async function handler(req, res) {
     }
     state.version = Number(state.version || 0) + 1;
     state.updatedAt = Date.now();
-    await store.writeJSON('space:' + space + ':state', state);
+    if (!await store.compareAndSetJSON('space:' + space + ':state', state.version - 1, state)) {
+      http.send(res, 409, { error: 'version-conflict', ...publicState(await monitor.loadState(space)) }); return;
+    }
     http.send(res, 200, { ok: true, ...publicState(state) });
     return;
   }
@@ -115,17 +121,42 @@ module.exports = async function handler(req, res) {
     // survive a reset of the watchlist.
     const state = await monitor.loadState(space);
     const ledger = state.ledger;
-    await store.writeJSON('space:' + space + ':state', {
+    const cleared = {
       ...monitor.emptyState(), ledger,
+      signalLedger: state.signalLedger, signalPositions: state.signalPositions,
+    signalResults: state.signalResults || [], signalEvaluationAt: state.signalEvaluationAt || 0,
+    autoExec: process.env.PAPER_AUTO_EXEC !== 'false', signalSeen: state.signalSeen, signalConfirm: state.signalConfirm,
       subscriptions: body.keepSubscriptions === false ? {} : (state.subscriptions || {}),
       version: Number(state.version || 0) + 1, updatedAt: Date.now()
-    });
+    };
+    if (!await store.compareAndSetJSON('space:' + space + ':state', state.version, cleared)) {
+      http.send(res, 409, { error: 'version-conflict', ...publicState(await monitor.loadState(space)) }); return;
+    }
     http.send(res, 200, { ok: true, cleared: true });
     return;
   }
 
   if (method === 'POST') {
     const state = await monitor.loadState(space);
+    if (body.action === 'signal' || body.action === 'signals') {
+      if (process.env.PAPER_AUTO_EXEC === 'false') {
+        http.send(res, 200, { ok: true, queued: false, reason: 'disabled' }); return;
+      }
+      const signals = body.action === 'signal' ? [body.signal] : body.signals;
+      const now = Date.now();
+      if (!Array.isArray(signals) || signals.length > 150 || !signals.every(s => SignalPaper.validObservation(s, now))) {
+        http.send(res, 400, { ok: false, error: 'invalid-signal' }); return;
+      }
+      const before = JSON.stringify(state);
+      const results = signals.map(signal => SignalPaper.observe(state, signal, now));
+      if (before !== JSON.stringify(state)) {
+        state.version++; state.updatedAt = now;
+        if (!await store.compareAndSetJSON('space:' + space + ':state', state.version - 1, state)) {
+          http.send(res, 409, { error: 'version-conflict', ...publicState(await monitor.loadState(space)) }); return;
+        }
+      }
+      http.send(res, 200, { ok: true, queued: results.some(r => r.queued) }); return;
+    }
     const subscription = body.subscription;
     if (body.action === 'unsubscribe') {
       const endpoint = body.endpoint || (subscription && subscription.endpoint);
@@ -151,12 +182,19 @@ module.exports = async function handler(req, res) {
     }
     state.version = Number(state.version || 0) + 1;
     state.updatedAt = Date.now();
-    await store.writeJSON('space:' + space + ':state', state);
+    if (!await store.compareAndSetJSON('space:' + space + ':state', state.version - 1, state)) {
+      http.send(res, 409, { error: 'version-conflict', ...publicState(await monitor.loadState(space)) }); return;
+    }
     http.send(res, 200, { ok: true, subscriptionCount: Object.keys(state.subscriptions || {}).length });
     return;
   }
 
   http.send(res, 405, { error: 'method' });
+}
+
+module.exports = async (req, res) => {
+  try { await handler(req, res); }
+  catch (_) { http.send(res, 500, { ok: false, error: 'state-write-failed' }); }
 };
 
 module.exports.config = { maxDuration: 30 };

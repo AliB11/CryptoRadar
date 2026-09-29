@@ -1,5 +1,5 @@
 /* رادارِ بازار — service worker */
-const CACHE = 'radar-shell-v5-live';
+const CACHE = 'radar-shell-v6-live';
 const SHELL = [
   '/',
   '/index.html',
