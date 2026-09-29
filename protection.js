@@ -424,7 +424,7 @@
       // direct upstream follows.
       const urls = options.directOnly ? [] : [proxyUrl(params, options.proxyOrigin)];
       urls.push('https://api.coingecko.com/api/v3/coins/markets?' + params);
-      let data = null, failed = 'error';
+      let data = null, failed = 'error', dataProvider = 'coingecko';
       for (const url of urls) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 12000);
@@ -444,6 +444,9 @@
             failed = 'stale';
             break;
           }
+          const providerHeader = response.headers && typeof response.headers.get === 'function'
+            ? response.headers.get('X-Radar-Provider') : null;
+          if (providerHeader) dataProvider = providerHeader;
           const body = await response.json();
           if (!Array.isArray(body)) throw new Error('Invalid market response');
           data = body;
@@ -454,8 +457,28 @@
           clearTimeout(timer);
         }
       }
+      const observedNow=Number(clock());
+      const primaryById=new Map((data||[]).filter(row=>row&&typeof row.id==='string').map(row=>[row.id,row]));
+      const needsBackup=batch.filter(id=>{
+        const row=primaryById.get(id);if(!row)return true;
+        const quote={coinId:id,price:typeof row.current_price==='number'?row.current_price:NaN,
+          asOf:typeof row.last_updated==='string'?Date.parse(row.last_updated):NaN,source:'live'};
+        return !!quoteProblem({coinId:id,mode:'live',enteredAt:0},quote,observedNow);
+      });
+      const backupById=new Map();
+      if(needsBackup.length&&typeof options.fallbackQuotes==='function'){
+        try{
+          const backupRows=await options.fallbackQuotes(needsBackup,{now:observedNow,fetch:fetcher});
+          if(Array.isArray(backupRows))for(const row of backupRows)if(row&&typeof row.id==='string')backupById.set(row.id,row);
+        }catch(_){/* keep the original, validated failure below */}
+      }
       for (const id of batch) {
-        const row = data && data.find(candidate => candidate && candidate.id === id);
+        let row=primaryById.get(id);
+        if(row){
+          const primaryQuote={coinId:id,price:typeof row.current_price==='number'?row.current_price:NaN,
+            asOf:typeof row.last_updated==='string'?Date.parse(row.last_updated):NaN,source:'live'};
+          if(quoteProblem({coinId:id,mode:'live',enteredAt:0},primaryQuote,observedNow)&&backupById.has(id))row=backupById.get(id);
+        }else row=backupById.get(id);
         if (!row) {
           result[id] = { coinId: id, status: data ? 'missing' : failed };
           continue;
@@ -464,9 +487,11 @@
           coinId: id,
           price: typeof row.current_price === 'number' ? row.current_price : NaN,
           asOf: typeof row.last_updated === 'string' ? Date.parse(row.last_updated) : NaN,
-          source: 'live'
+          source: 'live',
+          provider: row.radar_provider || dataProvider,
+          timestampKind: row.radar_timestamp_kind || 'provider'
         };
-        const problem = quoteProblem({ coinId: id, mode: 'live', enteredAt: 0 }, quote, Number(clock()));
+        const problem = quoteProblem({ coinId: id, mode: 'live', enteredAt: 0 }, quote, observedNow);
         result[id] = { ...quote, status: problem || 'fresh' };
       }
     }

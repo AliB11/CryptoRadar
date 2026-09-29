@@ -457,6 +457,126 @@ test('simulation fallback keeps the terminal usable when CoinGecko is unreachabl
   window.close();
 });
 
+test('CoinLore recovery renders live snapshots while withholding hourly analysis', { skip: !JSDOM }, async () => {
+  const now = Date.now();
+  const markets = Array.from({ length: 75 }, (_, i) => ({
+    id: i === 0 ? 'bitcoin' : 'asset-' + i,
+    symbol: i === 0 ? 'btc' : 'a' + i,
+    name: i === 0 ? 'Bitcoin' : 'Asset ' + i,
+    current_price: i === 0 ? 68000 : 10 + i,
+    market_cap: 1000000000 - i * 1000000,
+    total_volume: 2300000 + i,
+    market_cap_rank: i + 1,
+    price_change_percentage_1h_in_currency: 0.4,
+    price_change_percentage_24h_in_currency: -1.2,
+    price_change_percentage_7d_in_currency: 3.5,
+    last_updated: new Date(now).toISOString(),
+    radar_provider: 'coinlore', radar_timestamp_kind: 'provider-batch'
+  }));
+  const macro = { data: { market_cap_percentage: { btc: 54.2, eth: 14.1 },
+    total_market_cap: { usd: 2500000000000 }, total_volume: { usd: 90000000000 },
+    market_cap_change_percentage_24h_usd: -0.8, active_cryptocurrencies: 14000 } };
+  const trending = { coins: markets.slice(0, 6).map((row, i) => ({ item: {
+    id: row.id, symbol: row.symbol.toUpperCase(), name: row.name, market_cap_rank: i + 1,
+    data: { price: row.current_price, price_change_percentage_24h: { usd: -1.2 } }
+  } })) };
+  const requests = [];
+  const fetch = async url => {
+    requests.push(String(url));
+    const target = new URL(String(url), 'http://localhost');
+    const src = target.searchParams.get('src');
+    if (src === 'health') return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) };
+    if (src === 'fng') return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ data: [{ value: '46' }] }) };
+    if (src === 'cg') {
+      const path = target.searchParams.get('path');
+      const data = path === 'coins/markets' ? markets : path === 'global' ? macro : path === 'search/trending' ? trending : [];
+      const headers = { get: key => key.toLowerCase() === 'x-radar-provider' ? 'coinlore'
+        : key.toLowerCase() === 'x-radar-history' ? 'none'
+        : key.toLowerCase() === 'x-radar-cache' ? 'MISS' : null };
+      return { ok: true, status: 200, headers, json: async () => data };
+    }
+    throw new Error('unexpected network request: ' + url);
+  };
+  const { window, errors } = boot({ fetch });
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(250);
+  const state = window.RadarTerminal.state;
+  const $ = selector => window.document.querySelector(selector);
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  assert.equal(state.live, true, 'a fallback quote is live data, not simulation');
+  assert.equal(state.provider, 'coinlore');
+  assert.equal(state.historyReady, false, 'CoinLore snapshots must bypass hourly analysis');
+  assert.ok(state.coins.length >= 50);
+  assert.ok(state.coins.every(coin => coin.spark.length === 0));
+  assert.ok($('#rows').children.length >= 50, 'snapshot market rows must render');
+  assert.ok($('#rows').textContent.includes('snapshot'));
+  assert.equal($('#btTh').disabled, true, 'backtest controls must be withheld');
+  assert.equal($('#btcChart').style.display, 'none', 'the hourly chart must not show empty/fabricated data');
+  assert.ok($('#momentumRoot').textContent.includes('غیرفعال'));
+  assert.ok($('#foot').textContent.includes('coinlore'));
+  const csv = window.eval('buildCSV()');
+  assert.ok(csv.includes('provider-batch'), 'snapshot CSV must preserve timestamp provenance');
+  assert.ok(csv.includes('3.5'), 'snapshot CSV must include provider-reported changes');
+  assert.ok(requests.every(url => !/api\.coingecko\.com/.test(url)), 'the mocked proxy supplied the fallback');
+  window.close();
+});
+
+test('static hosts with no proxy use a CoinLore snapshot after CoinGecko fails', { skip: !JSDOM }, async () => {
+  const tickers = Array.from({ length: 65 }, (_, i) => ({
+    id: String(i + 1), nameid: i === 0 ? 'bitcoin' : 'asset-' + i,
+    name: i === 0 ? 'Bitcoin' : 'Asset ' + i, symbol: i === 0 ? 'BTC' : 'A' + i,
+    price_usd: String(i === 0 ? 68000 : 10 + i), market_cap_usd: String(1e9 - i * 1e6),
+    volume24: '2300000', rank: i + 1, percent_change_1h: '0.4',
+    percent_change_24h: '-1.2', percent_change_7d: '3.5'
+  }));
+  const requests = [];
+  const fetch = async url => {
+    requests.push(String(url));
+    const target = new URL(String(url), 'http://localhost');
+    if (target.pathname === '/api/proxy') return { ok: false, status: 404, headers: { get: () => null }, json: async () => ({}) };
+    if (target.hostname === 'api.coinlore.net' && target.pathname === '/api/tickers/')
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ data: tickers, info: { time: Math.floor(Date.now() / 1000) } }) };
+    if (target.hostname === 'api.coinlore.net' && target.pathname === '/api/global/')
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => [{
+        total_mcap: '2500000000000', total_volume: '90000000000', btc_d: '54.2', eth_d: '14.1',
+        mcap_change: '-0.8', coins_count: '14000'
+      }] };
+    return { ok: false, status: 503, headers: { get: () => null }, json: async () => ({ error: 'offline' }) };
+  };
+  const { window, errors } = boot({ fetch });
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(150);
+  assert.deepEqual(errors, [], 'runtime errors:\\n' + errors.join('\\n'));
+  assert.equal(window.RadarTerminal.state.live, true);
+  assert.equal(window.RadarTerminal.state.provider, 'coinlore');
+  assert.equal(window.RadarTerminal.state.historyReady, false);
+  assert.ok(requests.some(url => url.includes('https://api.coinlore.net/api/tickers/')));
+  window.close();
+});
+
+test('when both market providers are offline, the existing simulation recovery still runs', { skip: !JSDOM }, async () => {
+  const requests = [];
+  const fetch = async url => {
+    requests.push(String(url));
+    const target = new URL(String(url), 'http://localhost');
+    if (target.searchParams.get('src') === 'health')
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) };
+    return { ok: false, status: 503, headers: { get: () => null }, json: async () => ({ error: 'offline' }) };
+  };
+  const { window, errors } = boot({ fetch });
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(200);
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  assert.equal(window.RadarTerminal.state.live, false);
+  assert.equal(window.RadarTerminal.state.provider, 'simulation');
+  assert.equal(window.RadarTerminal.state.historyReady, true);
+  assert.ok(window.RadarTerminal.state.coins.length >= 90);
+  assert.ok(requests.some(url => url.includes('path=coins%2Fmarkets')));
+  assert.ok(requests.every(url => !/api\.coingecko\.com|api\.coinlore\.net/.test(url)),
+    'with a working proxy route, the browser must not bypass it to hammer providers');
+  window.close();
+});
+
 test('enabling monitoring against an empty server never wipes the local portfolio', { skip: !JSDOM }, async () => {
   const { window, errors } = boot();
   assert.ok(await waitForBoot(window), 'boot overlay must finish');
