@@ -2,7 +2,6 @@
 """CryptoRadar — static files + allowlisted market-data proxy."""
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import re
@@ -46,108 +45,11 @@ _LOCK = threading.Lock()
 # single-implementation, so this process shells out to lib/monitor.js rather
 # than re-implementing it in Python.
 # --------------------------------------------------------------------------
-_STATE_LOCK = threading.Lock()
 NODE_BIN = shutil.which("node")
 
 
 def _kv_path() -> str:
     return os.environ.get("RADAR_STORE_FILE") or STATE_FILE
-
-
-def _kv_load() -> dict:
-    with _STATE_LOCK:
-        try:
-            with open(_kv_path(), "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
-
-
-def _kv_save(data: dict) -> None:
-    path = _kv_path()
-    with _STATE_LOCK:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
-        os.replace(tmp, path)
-
-
-def _k(name: str) -> str:
-    return KV_PREFIX + ":" + name
-
-
-def _space_state(space: str) -> dict:
-    raw = _kv_load().get(_k("space:%s:state" % space))
-    if not raw:
-        return {"version": 0, "updatedAt": 0, "portfolio": [], "alerts": [],
-                "ledger": [], "subscriptions": {}}
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return {"version": 0, "updatedAt": 0, "portfolio": [], "alerts": [],
-                "ledger": [], "subscriptions": {}}
-    data.setdefault("version", 0)
-    data.setdefault("portfolio", [])
-    data.setdefault("alerts", [])
-    data.setdefault("ledger", [])
-    data.setdefault("subscriptions", {})
-    return data
-
-
-def _write_state(space: str, state: dict) -> None:
-    kv = _kv_load()
-    kv[_k("space:%s:state" % space)] = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-    _kv_save(kv)
-
-
-def _pulse(space: str):
-    raw = _kv_load().get(_k("space:%s:pulse" % space))
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except ValueError:
-        return None
-
-
-def _public_state(state: dict) -> dict:
-    return {
-        "version": state.get("version", 0),
-        "updatedAt": state.get("updatedAt", 0),
-        "portfolio": state.get("portfolio", []),
-        "alerts": state.get("alerts", []),
-        "ledger": state.get("ledger", []),
-        "subscriptionCount": len(state.get("subscriptions") or {}),
-    }
-
-
-def _authorized(handler) -> bool:
-    token = os.environ.get("RADAR_TOKEN", "")
-    if not token:
-        return True          # dev server: nothing to protect yet
-    presented = handler.headers.get("x-radar-token") or ""
-    auth = handler.headers.get("Authorization") or ""
-    if auth.lower().startswith("bearer "):
-        presented = presented or auth[7:].strip()
-    return hmac.compare_digest(str(presented), str(token))
-
-
-def interval_sec() -> int:
-    """PULSE_INTERVAL_SEC, clamped — never a 500 because of a typo.
-
-    A bare `int(os.environ[...])` raises on "90s", "" or "abc", and this value
-    is read on every /api/state and /api/pulse request, so one bad environment
-    variable used to take the whole API down with a ValueError instead of just
-    one endpoint complaining. The tick clamps to the same range itself.
-    """
-    raw = os.environ.get("PULSE_INTERVAL_SEC")
-    try:
-        value = int(float(str(raw).strip()))
-    except (TypeError, ValueError):
-        return 90
-    return max(30, min(3600, value))
 
 
 def ttl_for(path: str, src: str) -> int:
@@ -183,7 +85,17 @@ def fetch_json(url: str, ttl: int):
         if age < ttl:
             return hit[1], True, False
         stale = hit[1]
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": UA})
+    headers = {"Accept": "application/json", "User-Agent": UA}
+    upstream = url
+    if url.startswith(CG):
+        pro = os.environ.get("COINGECKO_PRO_API_KEY")
+        demo = os.environ.get("COINGECKO_DEMO_API_KEY")
+        if pro:
+            upstream = url.replace(CG, "https://pro-api.coingecko.com/api/v3/", 1)
+            headers["x-cg-pro-api-key"] = pro
+        elif demo:
+            headers["x-cg-demo-api-key"] = demo
+    req = urllib.request.Request(upstream, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=12, context=CTX) as r:
             raw = r.read()
@@ -191,7 +103,7 @@ def fetch_json(url: str, ttl: int):
             cache_put(url, data)
             return data, False, False
     except urllib.error.HTTPError as e:
-        if e.code == 429 and stale is not None:
+        if (e.code == 429 or e.code >= 500) and stale is not None:
             return stale, True, True
         err = OSError(f"upstream {e.code}")
         err.status = 429 if e.code == 429 else (e.code if 400 <= e.code < 600 else 502)
@@ -214,7 +126,7 @@ class Handler(SimpleHTTPRequestHandler):
         result = super().translate_path(path)
         rel = os.path.normpath(os.path.relpath(result, ROOT))
         top = rel.split(os.sep)[0]
-        if top in {".git", ".env", ".venv"} or top.startswith(".env"):
+        if top in {".git", ".env", ".venv", ".radar-state"} or top.startswith(".env"):
             return os.path.join(ROOT, "__forbidden__")
         return result
 
@@ -246,6 +158,12 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.rstrip("/") == "/api/proxy":
             self.handle_proxy(parsed)
+            return
+        if parsed.path.rstrip("/") == "/api/state":
+            self.handle_state(parsed)
+            return
+        if parsed.path.rstrip("/") == "/api/pulse":
+            self.handle_pulse(parsed)
             return
         super().do_HEAD()
 
@@ -288,7 +206,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD": self.wfile.write(body)
 
     def handle_proxy(self, parsed: urllib.parse.ParseResult) -> None:
         q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
@@ -333,141 +251,67 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", cache or "no-store")
+        self.send_header("Cache-Control", "no-store")
+        if cache: self.send_header("X-Radar-Cache", cache)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-radar-token")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD": self.wfile.write(body)
 
     def handle_state(self, parsed: urllib.parse.ParseResult) -> None:
-        if not _authorized(self):
-            return self._json(401, {"error": "unauthorized"})
-        q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        space = (q.get("space", [""])[0] or os.environ.get("RADAR_SPACE") or "default")
-        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", str(space)):
-            space = "default"
-
-        if self.command in ("GET", "HEAD"):
-            state = _space_state(space)
-            payload = {"ok": True, "space": space, "store": "file", "pulse": _pulse(space),
-                       "intervalSec": interval_sec()}
-            payload.update(_public_state(state))
-            pub = os.environ.get("VAPID_PUBLIC_KEY") or ""
-            payload["push"] = {"configured": bool(pub), "publicKey": pub}
-            return self._json(200, payload)
-
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length).decode("utf-8") if length else ""
-        try:
-            body = json.loads(raw) if raw else {}
-        except ValueError:
-            return self._json(400, {"ok": False, "error": "json"})
-
-        state = _space_state(space)
-        if self.command == "PUT":
-            base = body.get("base")
-            if base is not None and int(base) != int(state.get("version", 0)):
-                payload = {"ok": False, "error": "version-conflict",
-                           "detail": "وضعیتِ سرور جلوتر است؛ ابتدا بخوانید."}
-                payload.update(_public_state(state))
-                return self._json(409, payload)
-            if isinstance(body.get("portfolio"), list):
-                state["portfolio"] = body["portfolio"][:400]
-            if isinstance(body.get("alerts"), list):
-                state["alerts"] = body["alerts"][:500]
-            if len(state.get("ledger") or []) > 2000:
-                state["ledger"] = state["ledger"][-2000:]
-        elif self.command == "DELETE":
-            # Keep the ledger: an audit trail should survive a reset. Every
-            # branch below falls through to the shared tail that bumps the
-            # version exactly once, so this one must not pre-increment — doing
-            # so made a DELETE jump the version by two and desynchronised a
-            # client that had just read it (its next PUT was then rejected as
-            # a conflict it could not explain).
-            keep = state.get("subscriptions") or {}
-            state = {"version": int(state.get("version", 0)), "updatedAt": int(time.time() * 1000),
-                     "portfolio": [], "alerts": [], "ledger": state.get("ledger") or [],
-                     "subscriptions": {} if body.get("keepSubscriptions") is False else keep}
-        elif self.command == "POST":
-            sub = body.get("subscription") or {}
-            subs = state.get("subscriptions") or {}
-            if body.get("action") == "unsubscribe":
-                subs.pop(body.get("endpoint") or sub.get("endpoint"), None)
-            elif sub.get("endpoint") and sub.get("keys", {}).get("p256dh"):
-                if len(subs) >= 20:
-                    oldest = min(subs, key=lambda k: subs[k].get("addedAt") or 0)
-                    subs.pop(oldest, None)
-                subs[sub["endpoint"]] = {"endpoint": sub["endpoint"], "keys": sub["keys"],
-                                         "label": str(body.get("label") or "")[:80],
-                                         "addedAt": int(time.time() * 1000)}
-            else:
-                return self._json(400, {"ok": False, "error": "subscription"})
-            state["subscriptions"] = subs
-        else:
-            return self._json(405, {"error": "method"})
-
-        state["version"] = int(state.get("version", 0)) + 1
-        state["updatedAt"] = int(time.time() * 1000)
-        _write_state(space, state)
-        payload = {"ok": True}
-        payload.update(_public_state(state))
-        return self._json(200, payload)
-
-    def handle_pulse(self, parsed: urllib.parse.ParseResult) -> None:
-        # CRON_SECRET (Bearer, what Vercel Cron sends) and RADAR_TOKEN (what the
-        # page and tools/pinger.mjs send) are both accepted — same contract as
-        # api/pulse.js. Requiring only CRON_SECRET when it is set would stop an
-        # open tab from driving the heartbeat.
-        secrets = [s for s in (os.environ.get("CRON_SECRET"), os.environ.get("RADAR_TOKEN")) if s]
-        if secrets:
-            auth = self.headers.get("Authorization") or ""
-            presented = self.headers.get("x-radar-token") or ""
-            if auth.lower().startswith("bearer "):
-                presented = presented or auth[7:].strip()
-            if not any(hmac.compare_digest(str(presented), str(s)) for s in secrets):
-                return self._json(401, {"error": "unauthorized"})
-
-        q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        space = (q.get("space", [""])[0] or os.environ.get("RADAR_SPACE") or "default")
-        pulse = _pulse(space)
-        interval = interval_sec()
-
-        if q.get("status", [""])[0] == "1":
-            age = (int(time.time() * 1000) - pulse["lastRun"]) if pulse and pulse.get("lastRun") else None
-            return self._json(200, {
-                "ok": True, "mode": "status", "store": "file", "pulse": pulse, "ageMs": age,
-                "late": age is not None and age > interval * 1000 * 4,
-                "nextInMs": max(0, pulse["lastRun"] + interval * 1000 - int(time.time() * 1000))
-                if pulse and pulse.get("lastRun") else 0,
-            })
-
+        # Use the production handler, including auth, validation and atomic CAS.
+        # A second Python writer used to race the monitor and erase its ledger.
         if not NODE_BIN:
-            # Without Node we cannot run the real rule engine, and re-implementing
-            # it here would create a second, divergent source of truth.
-            return self._json(200, {
-                "ok": True, "skipped": "node-runtime-required", "space": space,
-                "store": "file", "intervalSec": interval, "pulse": pulse,
-                "detail": "برای اجرای تیکِ واقعی، Node لازم است (lib/monitor.js).",
-            })
-
-        script = (
-            "require(%s).tick({now:Date.now(),space:%s,force:%s}).then(r=>process.stdout.write(JSON.stringify(r))).catch(e=>{process.stdout.write(JSON.stringify({ok:false,error:String(e&&e.message||e)}));process.exit(0)})"
-            % (json.dumps(os.path.join(ROOT, "lib", "monitor.js")), json.dumps(space),
-               "true" if q.get("force", [""])[0] in ("1", "true") else "false")
-        )
+            return self._json(503, {"error": "node-runtime-required"})
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length < 0 or length > 2_000_000:
+                return self._json(413, {"error": "body-too-large"})
+            body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "json-object-required"})
+        except (ValueError, UnicodeError):
+            return self._json(400, {"error": "json"})
+        request = {"method": self.command, "url": self.path,
+                   "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body}
+        script = """
+const fs=require('node:fs');
+const req=JSON.parse(fs.readFileSync(0,'utf8'));
+const headers={};
+const res={statusCode:200,setHeader:(k,v)=>headers[k]=v,
+  end:body=>process.stdout.write(JSON.stringify({status:res.statusCode,body:JSON.parse(body||'{}')}))};
+require('./api/state.js')(req,res).catch(()=>{process.stdout.write(JSON.stringify({status:500,body:{error:'state-failed'}}))});
+"""
         env = dict(os.environ)
         env["RADAR_STORE_FILE"] = _kv_path()
         try:
             proc = subprocess.run([NODE_BIN, "-e", script], cwd=ROOT, env=env,
-                                  capture_output=True, timeout=90)
-            out = (proc.stdout or b"").decode("utf-8", "replace").strip()
-            if not out:
-                raise RuntimeError((proc.stderr or b"").decode("utf-8", "replace")[:300] or "empty output")
-            result = json.loads(out)
-        except Exception as exc:  # noqa: BLE001 - surfaced verbatim to the caller
-            return self._json(500, {"ok": False, "error": str(exc)[:400], "store": "file"})
-        return self._json(200 if result.get("ok", True) else 500, result)
+                                  input=json_bytes(request), capture_output=True, timeout=30)
+            result = json.loads(proc.stdout.decode("utf-8"))
+            return self._json(result["status"], result["body"])
+        except Exception:
+            return self._json(500, {"error": "state-failed"})
+
+    def handle_pulse(self, parsed: urllib.parse.ParseResult) -> None:
+        if not NODE_BIN:
+            return self._json(503, {"ok": False, "error": "node-runtime-required"})
+        request = {"method": self.command, "url": self.path,
+                   "headers": {k.lower(): v for k, v in self.headers.items()}}
+        script = """
+const fs=require('node:fs'); const req=JSON.parse(fs.readFileSync(0,'utf8'));
+const res={statusCode:200,setHeader:()=>{},end:body=>process.stdout.write(JSON.stringify({status:res.statusCode,body:JSON.parse(body||'{}')}))};
+require('./api/pulse.js')(req,res).catch(()=>process.stdout.write(JSON.stringify({status:500,body:{ok:false,error:'pulse-failed'}})));
+"""
+        env = dict(os.environ)
+        env["RADAR_STORE_FILE"] = _kv_path()
+        try:
+            proc = subprocess.run([NODE_BIN, "-e", script], cwd=ROOT, env=env,
+                                  input=json_bytes(request), capture_output=True, timeout=90)
+            result = json.loads(proc.stdout.decode("utf-8"))
+            return self._json(result["status"], result["body"])
+        except Exception:
+            return self._json(500, {"ok": False, "error": "pulse-failed"})
 
 
 

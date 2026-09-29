@@ -722,3 +722,35 @@ function concat(enc, ...arrays) {
 test.after(() => {
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* best effort */ }
 });
+
+test('state CAS rejects stale writers and forced ticks respect an occupied lock', async () => {
+  const k='space:cas-test:state';
+  assert.equal(await store.compareAndSetJSON(k,0,{version:1}),true);
+  assert.equal(await store.compareAndSetJSON(k,0,{version:2}),false);
+  const owner=await store.acquireLock('space:cas-test:lock',30000);
+  assert.ok(owner);
+  assert.equal(await store.releaseLock('space:cas-test:lock','wrong-owner'),false);
+  const result=await monitor.tick({space:'cas-test',force:true});
+  assert.ok(result.skipped);
+  await store.releaseLock('space:cas-test:lock',owner);
+});
+
+test('authenticated signal upload flows through two monitor ticks to paper ledger', async () => {
+  const handler=require('../api/state');
+  const savedToken=process.env.RADAR_TOKEN;
+  process.env.RADAR_TOKEN='test-paper-token';
+  const savedFetch=global.fetch;
+  const now=Date.now(); let at=now;
+  const factors=Object.fromEntries(['trend','macd','rsi','boll','anchor','stable','robust','edge'].map(k=>[k,true]));
+  const upload=async()=>{let data,status;await handler({method:'POST',url:'/api/state?space=signal-integration',headers:{'x-radar-token':'test-paper-token'},body:{action:'signal',signal:{coinId:'bitcoin',label:'BUY',grade:'A+',observedPrice:100,observedAt:at,factors}}},{setHeader(){},set statusCode(v){status=v;},end(body){data=JSON.parse(body);}});assert.equal(status,200,JSON.stringify(data));};
+  try {
+    global.fetch=async()=>({ok:true,headers:{get:()=>null},json:async()=>[{id:'bitcoin',current_price:100,last_updated:new Date(at).toISOString()}]});
+    await upload(); await monitor.tick({space:'signal-integration',now:at,force:true});
+    at+=60000; await upload(); await monitor.tick({space:'signal-integration',now:at,force:true});
+    const state=await monitor.loadState('signal-integration');
+    assert.equal(state.signalLedger.length,1);
+    assert.equal(state.signalPositions[0].status,'OPEN');
+    await monitor.tick({space:'signal-integration',now:at,force:true});
+    assert.equal((await monitor.loadState('signal-integration')).signalLedger.length,1);
+  } finally {global.fetch=savedFetch;if(savedToken===undefined)delete process.env.RADAR_TOKEN;else process.env.RADAR_TOKEN=savedToken;}
+});

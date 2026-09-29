@@ -10,6 +10,7 @@ const ALLOW_QS = new Set([
   'price_change_percentage', 'days', 'ids', 'limit'
 ]);
 const CG = 'https://api.coingecko.com/api/v3/';
+const { authenticatedFetch } = require('../lib/coingecko.js');
 const FNG = 'https://api.alternative.me/fng/';
 const UA = 'CryptoRadar/1.1 (signal-terminal; +https://github.com/AliB11/CryptoRadar)';
 
@@ -21,17 +22,25 @@ function ttlFor(path, src) {
   return 70;
 }
 
+const inflight = new Map();
 async function getJSON(url, ttl) {
+  if (inflight.has(url)) return inflight.get(url);
+  const task = requestJSON(url, ttl).finally(() => inflight.delete(url));
+  inflight.set(url, task);
+  return task;
+}
+
+async function requestJSON(url, ttl) {
   const hit = cache.get(url);
   if (hit && Date.now() - hit.t < ttl * 1000) return { data: hit.v, cached: true, stale: false };
-  const r = await fetch(url, {
+  const r = await authenticatedFetch()(url, {
     headers: { accept: 'application/json', 'user-agent': UA },
     signal: AbortSignal.timeout(12000)
   });
-  if (r.status === 429) {
+  if (r.status === 429 || r.status >= 500) {
     if (hit) return { data: hit.v, cached: true, stale: true };
-    const err = new Error('rate limited');
-    err.status = 429;
+    const err = new Error('upstream ' + r.status);
+    err.status = r.status;
     throw err;
   }
   if (!r.ok) {
@@ -59,7 +68,9 @@ function paramsOf(req) {
 
 module.exports = async function handler(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Cache-Control', 'public, max-age=30');
+  // Shared CDN caching amortizes CoinGecko's public quota across serverless
+  // instances; an in-process Map alone dies on every cold start.
+  res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=70, must-revalidate');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   if (req.method === 'OPTIONS') { res.statusCode = 204; res.end(); return; }
@@ -74,6 +85,7 @@ module.exports = async function handler(req, res) {
 
   try {
     if (src === 'health') {
+      res.setHeader('Cache-Control', 'no-store');
       res.statusCode = 200;
       res.end(JSON.stringify({ ok: true, cache: cache.size, ts: Date.now() }));
       return;
@@ -115,6 +127,8 @@ module.exports = async function handler(req, res) {
   } catch (e) {
     const st = e && e.status ? e.status : 502;
     res.statusCode = st;
+    res.setHeader('Cache-Control', 'no-store');
+    if (st === 429) res.setHeader('Retry-After', '60');
     res.end(JSON.stringify({ error: 'upstream', detail: String(e && e.message || e) }));
   }
 };

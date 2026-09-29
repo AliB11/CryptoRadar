@@ -170,16 +170,20 @@ function cgUrl(pathWithQuery){
   return `/api/proxy?src=cg&path=${encodeURIComponent(path)}${qs?'&'+qs:''}`;
 }
 async function probeProxy(){
+  if(location.protocol==='file:')return false;
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),3000);
   try{
-    const r=await fetch('/api/proxy?src=health',{cache:'no-store'});
+    const r=await fetch('/api/proxy?src=health',{cache:'no-store',signal:ac.signal});
     if(!r.ok)return false;
     const v=await r.json();
     return !!(v&&v.ok);
-  }catch(e){return false;}
+  }catch(e){return false;}finally{clearTimeout(timer);}
 }
 async function cgGet(pathWithQuery,ttl){
   const urls=[];
-  if(state.proxy!==false)urls.push(cgUrl(pathWithQuery));
+  // Re-probe on each request: a transient proxy failure must not permanently
+  // route every subsequent refresh through the rate-limited public API.
+  if(location.protocol!=='file:')urls.push(cgUrl(pathWithQuery));
   urls.push('https://api.coingecko.com/api/v3/'+pathWithQuery);
   let last;
   for(const u of urls){
@@ -187,13 +191,14 @@ async function cgGet(pathWithQuery,ttl){
       const v=await Hub.jget(u,ttl);
       if(u.startsWith('/api/'))state.proxy=true;
       return v;
-    }catch(e){last=e;if(u.startsWith('/api/'))state.proxy=false;}
+    }catch(e){last=e;if(u.startsWith('/api/')){state.proxy=false;
+      if(e.status&&e.status!==404)throw e;}}
   }
   throw last||new Error('cg');
 }
 async function fngGet(ttl){
   const urls=[];
-  if(state.proxy!==false)urls.push('/api/proxy?src=fng&limit=30');
+  if(location.protocol!=='file:')urls.push('/api/proxy?src=fng&limit=30');
   urls.push('https://api.alternative.me/fng/?limit=30');
   let last;
   for(const u of urls){
@@ -201,7 +206,8 @@ async function fngGet(ttl){
       const v=await Hub.jget(u,ttl);
       if(u.startsWith('/api/'))state.proxy=true;
       return v;
-    }catch(e){last=e;if(u.startsWith('/api/'))state.proxy=false;}
+    }catch(e){last=e;if(u.startsWith('/api/')){state.proxy=false;
+      if(e.status&&e.status!==404)throw e;}}
   }
   throw last||new Error('fng');
 }
@@ -212,23 +218,17 @@ const Hub={cache:new Map(),inflight:new Map(),
    if(c&&Date.now()-c.t<ttl)return c.v;
    if(this.inflight.has(url))return this.inflight.get(url);
    const p=(async()=>{
-     let lastErr;
-     for(let attempt=0;attempt<3;attempt++){
-       const ac=new AbortController();const tm=setTimeout(()=>ac.abort(),12000);
-       try{
-         const r=await fetch(url,{signal:ac.signal,headers:{accept:'application/json'}});
-         if(r.status===429){lastErr=new Error('HTTP 429');await sleep(1100*(attempt+1));continue;}
-         if(!r.ok)throw new Error('HTTP '+r.status);
-         const v=await r.json();
-         this.cache.set(url,{t:Date.now(),v});
-         return v;
-       }catch(e){
-         lastErr=e;
-         if(e&&e.name==='AbortError')break;
-         if(attempt<2)await sleep(400*(attempt+1));
-       }finally{clearTimeout(tm);}
-     }
-     throw lastErr||new Error('fetch');
+     const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),12000);
+     try{
+       const r=await fetch(url,{signal:ac.signal,headers:{accept:'application/json'}});
+       if(!r.ok){const e=new Error('HTTP '+r.status);e.status=r.status;throw e;}
+       const cache=r.headers&&r.headers.get?r.headers.get('X-Radar-Cache'):null;
+       if(cache==='STALE'){const e=new Error('stale market data');e.status=503;throw e;}
+       const v=await r.json();
+       this.cache.set(url,{t:Date.now(),v});
+       return v;
+     }finally{clearTimeout(tm);}
+
    })().finally(()=>this.inflight.delete(url));
    this.inflight.set(url,p);
    return p;
@@ -773,9 +773,15 @@ function mcRobustness(c,sims=10){
   const dir=prone?c.proneDir:(Math.sign(c.finalScore)||1);
   let keep=0;
   const st=Math.max(1,n-60);
+  // Repeated data must not change an execution-grade signal just because a
+  // second tab rolled different Monte Carlo noise. Seed by the full series.
+  let seed=2166136261;
+  for(const ch of String(c.id)+'|'+sp.join(',')){seed^=ch.charCodeAt(0);seed=Math.imul(seed,16777619);}
+  const random=()=>{seed=(Math.imul(1664525,seed)+1013904223)>>>0;return(seed+1)/4294967297;};
+  const noise=()=>Math.sqrt(-2*Math.log(random()))*Math.cos(2*Math.PI*random());
   for(let s=0;s<sims;s++){
     const sp2=sp.slice();
-    for(let i=st;i<n;i++)sp2[i]*=1+randn()*c.vol*0.7;
+    for(let i=st;i<n;i++)sp2[i]*=1+noise()*c.vol*0.7;
     const r=scoreLite(sp2,c.vol);
     const d=prone?(Math.sign(r.e12-r.e26)||1):(Math.sign(r.score)||1);
     if(d===dir)keep++;
@@ -990,7 +996,8 @@ function marketCoin(x){
   const sym=(x.symbol||'').toUpperCase(),id=String(x.id||'');
   if(!id||STABLES.has(sym.toLowerCase())||/_/.test(sym)||/(tokenized|heloc|wrapped-steth)/i.test(id))return null;
   const spark=x.sparkline_in_7d&&Array.isArray(x.sparkline_in_7d.price)?x.sparkline_in_7d.price.map(Number).filter(v=>isFinite(v)&&v>0):[];
-  return {id,sym,name:x.name||sym,rank:x.market_cap_rank||0,mcap:x.market_cap||0,vol24:x.total_volume||0,price:+x.current_price,
+  return {id,sym,name:x.name||sym,rank:x.market_cap_rank||0,mcap:x.market_cap||0,vol24:x.total_volume||0,price:+x.current_price,marketPrice:+x.current_price,
+    observedAt:typeof x.last_updated==='string'?Date.parse(x.last_updated):NaN,
     ch1h:numOrNull(x.price_change_percentage_1h_in_currency),
     ch24api:numOrNull(x.price_change_percentage_24h_in_currency!=null?x.price_change_percentage_24h_in_currency:x.price_change_percentage_24h),
     ch7d:numOrNull(x.price_change_percentage_7d_in_currency),
@@ -1002,9 +1009,12 @@ function marketCoin(x){
 }
 
 async function fetchLive(){
-  const mk=page=>cgGet(`coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d,200d,1y`,80000);
-  const [a,b,g]=await Promise.all([mk(1),mk(2).catch(()=>null),
-    cgGet('global',80000).catch(()=>null)]);
+  const mk=page=>cgGet(`coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d,200d,1y`,80000);
+  // One 150-row page leaves room for filtering stablecoins from the top 100.
+  // A second page and a
+  // 250-coin volume scan at boot exhaust CoinGecko's public rate budget.
+  const [a,g]=await Promise.all([mk(1),cgGet('global',80000).catch(()=>null)]);
+  const b=Array.isArray(a)&&a.length<60 ? await mk(2).catch(()=>null) : null;
   const raw=[...(Array.isArray(a)?a:[]),...(Array.isArray(b)?b:[])];
   const coins=raw.map(marketCoin).filter(x=>x&&x.spark.length>=120).slice(0,100);
   if(coins.length<50)throw new Error('insufficient');
@@ -1064,15 +1074,10 @@ async function loadMomentumUniverse(){
   const base='coins/markets?vs_currency=usd&order=volume_desc&sparkline=true&price_change_percentage=1h,24h,7d,30d,200d,1y';
   let rows=[];
   try{
-    const v=await cgGet(base+'&per_page=250&page=1',180000);
+    const v=await cgGet(base+'&per_page=100&page=1',180000);
     rows=Array.isArray(v)?v.map(marketCoin).filter(Boolean):[];
     if(rows.length<20)throw new Error('thin');
-  }catch(e){
-    try{
-      const v=await cgGet(base+'&per_page=100&page=1',180000);
-      rows=Array.isArray(v)?v.map(marketCoin).filter(Boolean):[];
-    }catch(e2){rows=state.momentumExtra||[];}
-  }
+  }catch(e){ rows=state.momentumExtra||[]; }
   state.momentumExtra=rows;renderMomentum();
 }
 function setupMomentum(){
@@ -1090,8 +1095,8 @@ async function loadExtras(){
       const d=v&&v.data;
       if(Array.isArray(d)&&d.length){
         state.fng={value:clamp(+d[0].value,0,100),hist:d.map(x=>clamp(+x.value,0,100))};
-      }else state.fng=simFng();
-    }catch(e){state.fng=simFng();}})(),
+      }else state.fng=state.live?null:simFng();
+    }catch(e){state.fng=state.live?null:simFng();}})(),
     (async()=>{try{
       const v=await cgGet('search/trending',900000);
       const arr=v&&v.coins;
@@ -1104,7 +1109,7 @@ async function loadExtras(){
                  ch24:ch!=null&&isFinite(+ch)?+ch:null};}).filter(t=>t.id&&t.sym);
         if(state.trending.length<4)throw new Error('trending');
       }else throw new Error('trending');
-    }catch(e){state.trending=simTrending();}})()
+    }catch(e){state.trending=state.live?[]:simTrending();}})()
   ]);
 }
 
@@ -1275,7 +1280,10 @@ function renderPulse(){
     const v=state.fng.value,col=v<45?C.down:v<56?C.amber:C.up;
     $('#fngGauge').innerHTML=fngGauge(v)+
       `<div class="fng-val"><b class="num" style="color:${col}">${v}</b><span style="color:${col}">${fngLabel(v)}</span></div>`;
-    drawFngHist();}
+    drawFngHist();}else{
+      $('#fngGauge').innerHTML='<div class="empty">شاخص در دسترس نیست</div>';
+      const cv=$('#fngHist');if(cv){const ctx=cv.getContext('2d');if(ctx)ctx.clearRect(0,0,cv.width,cv.height);}
+    }
   $('#trendList').innerHTML=state.trending.map((t,i)=>{
     const inTop=state.byId.has(t.id);
     return `<div class="trend-item ${inTop?'':'off'}" data-tid="${t.id}">
@@ -1283,7 +1291,7 @@ function renderPulse(){
       <div class="tr-name"><b>${esc(t.name)}</b><span>${esc(t.sym)}${t.rank?' · #'+t.rank:''}</span></div>
       ${t.price!=null?`<span class="num tr-p">$${fmtP(t.price)}</span>`:''}
       ${t.ch24!=null?`<span class="num tr-c ${t.ch24>=0?'up':'down'}">${fmtPct(t.ch24)}</span>`:''}
-    </div>`;}).join('');
+    </div>`;}).join('')||'<div class="empty">جست‌وجوهای داغ در دسترس نیست</div>';
   const item=c=>`<div class="gl-item" data-tid="${c.id}"><span class="sym">${esc(c.sym)}</span><span class="num">$${fmtP(c.price)}</span><b class="num ${c.ch24h>=0?'up':'down'}">${fmtPct(c.ch24h)}</b></div>`;
   $('#glWrap').innerHTML=
     `<div class="gl-col"><div class="gl-t up"><i data-lucide="trending-up"></i>بیشترین رشد ۲۴س</div>${state.gainers.map(item).join('')}</div>
@@ -1848,7 +1856,7 @@ async function pfAddFrom(c){
 }
 function setupProtection(){
   ProtectionView.mount({element:$('#protectionWrap'),getPortfolio:()=>state.pf,mutate:pfCommit,
-    onChange:renderPortfolio,toast,notify:radarNotify,directOnly:()=>state.proxy===false,
+    onChange:renderPortfolio,toast,notify:radarNotify,directOnly:()=>location.protocol==='file:',
     simulatedQuotes:()=>{
       const quotes={};
       if(!state.live&&state.lastUpdate)for(const c of state.coins)if(c.id.startsWith('sim-'))
@@ -2361,6 +2369,9 @@ async function safePipeline(data,onP){
   state.lastUpdate=new Date();
   try{runBacktest(state.btUI.th,state.btUI.risk);}catch(e){state.bt=null;}
   try{confluenceAll();}catch(e){}
+  // Only a fresh, confirmed live market observation may be queued. The server
+  // verifies the quote again before booking a paper fill.
+  try{if(window.RadarLive&&RadarLive.queueSignals)RadarLive.queueSignals(state.coins);}catch(e){}
   const safe=(name,fn)=>{try{fn();}catch(e){console.warn('render '+name+':',e);}};
   safe('top',renderTop);safe('ticker',renderTicker);safe('anchor',renderAnchor);
   safe('forecast',renderForecast);safe('pulse',renderPulse);safe('shortlist',renderShortlist);
@@ -2858,7 +2869,7 @@ window.RadarTerminal = {
   bootStep('pwa',setupPwa);
   bootStep('protection',setupProtection);
   bootStep('momentum',setupMomentum);
-  try{state.proxy=await probeProxy();}catch(e){state.proxy=false;}
+  try{state.proxy=store.get(DATA_MODE_KEY,'auto')==='simulation'?false:await probeProxy();}catch(e){state.proxy=false;}
   bootStep('compass',buildCompass);
   setTimeout(()=>{if(!bootDone)bootRecover('بارگذاری بیش از حد طول کشید (شبکه یا محدودیت نرخ) — ادامه با داده شبیه‌سازی');},25000);
   setTimeout(()=>{const b=$('#bootSkip');if(b&&!bootDone)b.style.display='inline-flex';},7000);

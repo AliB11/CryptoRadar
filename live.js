@@ -66,7 +66,8 @@
     lastBeat: null,        // { at, ok, skipped, fills, signals, error }
     lastSyncAt: 0,
     busy: false,
-    fingerprint: ''
+    fingerprint: '',
+    queuedSignals: new Set()
   };
 
   const headers = () => ({
@@ -320,6 +321,33 @@
     }
   }
 
+  /* ---------- confirmed signal paper trading ---------- */
+  // Submission is part of sync(), not a competing state writer. A refresh only
+  // requests a cycle; sync reads the current analysis, uploads it, then pulses.
+  function queueSignals() {
+    if (ready()) return sync('signals');
+  }
+  async function submitSignals() {
+    const t = term();
+    if (!t || !t.state.live || t.state.forcedSim || api.state.autoExec === false) return;
+    const now = Date.now();
+    const candidates = t.state.coins.filter(c => c && !String(c.id).startsWith('sim-') &&
+      Number.isFinite(c.marketPrice) && c.marketPrice > 0 &&
+      Number.isFinite(c.observedAt) && c.observedAt <= now + 60000 && now - c.observedAt < 300000);
+    const keyOf = c => c.id + ':' + c.observedAt + ':' + c.label + ':' + c.grade;
+    const pending = candidates.filter(c => !api.queuedSignals.has(keyOf(c)));
+    if (pending.length) {
+      await call('', { method: 'POST', body: { action: 'signals', signals: pending.map(c => ({
+        coinId: c.id, symbol: c.sym, label: c.label, grade: c.grade,
+        observedAt: c.observedAt, observedPrice: c.marketPrice, factors: c.conf8
+      })) } });
+      pending.forEach(c => api.queuedSignals.add(keyOf(c)));
+      if (api.queuedSignals.size > 400) api.queuedSignals.clear();
+      await pull();
+    }
+  }
+
+
   /* ---------- heartbeat ---------- */
 
   /** When the server would consider a new cycle due, from its own record. */
@@ -391,19 +419,20 @@
     api.busy = true;
     try {
       await pull();
+      await pushUp();
+      await submitSignals();
       // The page is the most reliable trigger an installation has: Vercel's
       // Hobby cron fires once a day, and an external pinger is optional. The
       // cadence itself still belongs to the server.
       const policy = options.beat || 'due';
       const beatResult = policy === 'never' ? null
-        : policy === 'force' ? await beat().catch(error => ({ ok: false, error: String(error && error.message || error) }))
+        : policy === 'force' ? await beat({ force: true }).catch(error => ({ ok: false, error: String(error && error.message || error) }))
         : await beatIfDue();
       if (beatResult && beatResult.ok && !beatResult.skipped) {
         // A cycle just ran and may have booked fills: read them back now so
         // the ledger and the plan states move the moment the user looks.
         await pull();
       }
-      await pushUp();
       render();
       return { ok: !api.lastError, skipped: null, reason, state: api.state };
     } catch (error) {
@@ -417,6 +446,7 @@
 
   async function forceTick() {
     if (!ready()) throw new Error('ابتدا توکنِ پایش را ذخیره کنید.');
+    await sync('before-force', { beat: 'never' });
     const result = await beat({ force: true });
     if (!result || !result.ok) throw new Error((result && result.error) || 'اجرای تیک ناموفق بود.');
     await pull();
@@ -597,6 +627,12 @@
         <div id="lvReadyBody"></div>
       </section>
 
+      <section class="panel live-panel wide" id="lvSignals">
+        <div class="panel-head"><h3>معاملات خودکار سیگنالی · فقط کاغذی</h3></div>
+        <p class="live-hint">خرید فقط با ردهٔ A+ (۸ تأیید) در دو مشاهدهٔ تازه با فاصلهٔ حداقل ۱ دقیقه و حداکثر ۵ دقیقه، و قیمت مستقل سرور انجام می‌شود. فروشِ A+ پوزیشن خرید را می‌بندد. تأیید شروط به معنی تضمین سود نیست؛ ورود ۱۰۰ دلار، سقف ۵ پوزیشن، حد ضرر ۵٪ و هدف ۱۰٪. رده‌بندی در مرورگر انجام می‌شود؛ سرور تازگی قیمت، اختلاف حداکثر ۲٪ و سقف معاملات را کنترل می‌کند، نه درستی پیش‌بینی را. هیچ سفارش واقعی و هیچ تغییری در پرتفوی دستی رخ نمی‌دهد. فروش فقط پوزیشن خریدِ کاغذی را می‌بندد؛ شورت باز نمی‌شود. سیگنال جدید فقط با صفحهٔ باز تولید می‌شود؛ حد ضرر و هدف با زمان‌سنج سرور حتی پس از بستن صفحه پایش می‌شوند. نیازمند پایش فعال، توکن و انبار پایدار است.</p>
+        <div id="lvSignalLedger"></div>
+      </section>
+
       <section class="panel live-panel wide" id="lvWhy">
         <div class="panel-head"><h3>چرا اجرای کاغذی رخ می‌دهد یا نمی‌دهد</h3>
           <span class="hint">وضعیتِ هر طرح از دیدِ سرور، بعد از آخرین تیک</span></div>
@@ -691,8 +727,10 @@
         'ارزیابی‌شده: ' + esc(fa(summary.evaluated || 0))),
       row('قیمت‌های تازه', esc(fa(summary.quotes == null ? '—' : summary.quotes)),
         'از ' + esc(fa(summary.quoteAttempts || 0)) + ' درخواست'),
-      row('اجرای کاغذی', esc(pulse && pulse.autoExec === false ? 'خاموش' : 'فعال'),
+      row('اجرای کاغذی', esc(api.state.autoExec === false || pulse && pulse.autoExec === false ? 'خاموش' : 'فعال'),
         'آخرین تیک: ' + esc(fa(summary.fills || 0)) + ' ثبت'),
+      row('معاملات سیگنالیِ کاغذی', esc(fa(((api.state && api.state.signalPositions) || []).filter(p => p.status === 'OPEN').length)),
+        'پوزیشن باز · ' + fa(((api.state && api.state.signalLedger) || []).length) + ' ثبت'),
       row('دستگاه‌های اعلان', esc(fa(subs)), api.pushKey ? 'کلید سرور آماده است' : 'کلید VAPID تنظیم نشده'),
       row('انبارِ وضعیت', esc((api.state && api.state.store) || '—'),
         ready() ? 'متصل' : (!cfg.token ? 'بدون توکن' : 'پایش خاموش')),
@@ -963,6 +1001,25 @@
     }
   }
 
+  function renderSignalLedger() {
+    const host = el('lvSignalLedger');
+    if (!host) return;
+    const positions = (api.state && api.state.signalPositions) || [];
+    const rows = ((api.state && api.state.signalLedger) || []).slice(-20).reverse();
+    const reasons = { 'awaiting-confirmation': 'منتظر تأیید دوم A+ (حداقل یک دقیقه)', 'invalid-or-stale': 'قیمت یا سیگنال کهنه/نامعتبر', 'old-quote': 'قیمت قدیمی‌تر از سیگنال', 'price-drift': 'تغییر قیمت بیش از ۲٪', 'already-open': 'پوزیشن از قبل باز است', cooldown: 'فاصلهٔ ۶ ساعته تا ورود مجدد', limit: 'سقف ۵ پوزیشن', 'no-open-position': 'پوزیشن خریدی برای فروش نیست', 'already-seen': 'قبلاً بررسی شده', 'before-entry': 'مشاهده مربوط به قبل از ورود', filled: 'اجرا شد' };
+    const results = (api.state && api.state.signalResults) || [];
+    const opened = positions.filter(p => p.status === 'OPEN');
+    host.innerHTML = '<p class="live-hint">تولید سیگنال: ' + (api.state.signalEvaluationAt && Date.now()-api.state.signalEvaluationAt < 300000 ? 'فعال در مرورگر' : 'منتظر تحلیل تازهٔ مرورگر') + ' · پوزیشن باز: ' + fa(opened.length) +
+      (opened.length ? ' · ' + opened.map(p => esc(p.symbol) + ' (' + esc(price(p.entryPrice)) + ')').join('، ') : '') + '</p>' +
+      (rows.length ? '<div class="live-table-wrap"><table class="live-table"><thead><tr><th>زمان</th><th>دارایی</th><th>جهت</th><th>دلیل</th><th>قیمت</th><th>سود/زیان ناخالص</th></tr></thead><tbody>' +
+        rows.map(r => '<tr><td>' + esc(when(r.at)) + '</td><td>' + esc(r.symbol) + '</td><td>' +
+          (r.side === 'BUY' ? 'خرید کاغذی' : 'فروش کاغذی') + '</td><td>' + esc(r.reason) +
+          '</td><td>' + esc(price(r.price)) + '</td><td>' +
+          esc(r.grossPnl == null ? '—' : price(r.grossPnl)) + '</td></tr>').join('') +
+        '</tbody></table></div>' : '<div class="empty">هنوز معاملهٔ سیگنالی ثبت نشده است.</div>') +
+      (results.length ? '<p class="live-hint">آخرین بررسی: ' + results.map(r => esc(r.coinId) + ': ' + esc(reasons[r.result] || r.result)).join(' · ') + '</p>' : '');
+  }
+
   function renderSettings() {
     // Never rebuild the inputs while they are being typed into: render() runs
     // on every sync, and losing the caret mid-token is maddening.
@@ -993,6 +1050,7 @@
     renderReadiness();
     renderWhy();
     renderLedger();
+    renderSignalLedger();
     renderSettings();
     renderProtection();
   }
@@ -1111,7 +1169,7 @@
   }
 
   root.RadarLive = {
-    start, render, sync, forceTick, beat, enablePush, disablePush,
+    start, render, sync, forceTick, beat, queueSignals, enablePush, disablePush,
     setEnabled, toggleMonitoring, setDataMode, openSection,
     get dataMode() { return dataMode(); },
     get config() { return { ...cfg }; },
