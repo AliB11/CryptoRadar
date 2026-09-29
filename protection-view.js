@@ -159,7 +159,23 @@
       if (!current.length) { render(); return; }
       get('[data-protection-refresh]').disabled = true;
       const live = current.filter(({ p }) => p.mode === 'live').map(({ p }) => p.coinId);
-      const received = await Engine.fetchQuotes(live, { directOnly: options.directOnly() });
+      const received = await Engine.fetchQuotes(live, {
+        directOnly: options.directOnly(),
+        // Same chain the terminal's market data uses: the venue that publishes
+        // candles first, then the keyless snapshot. A stop loss must not go
+        // unpriced because one provider is rate limiting this network — and
+        // neither source is consulted while the primary answers.
+        fallbackQuotes: async (ids, quoteOptions) => {
+          if (typeof window !== 'undefined' && window.RadarBinance) {
+            try { return await window.RadarBinance.fetchQuotes(ids, quoteOptions); }
+            catch (_) { /* fall through to the snapshot source */ }
+          }
+          if (typeof window !== 'undefined' && window.RadarCoinLore) {
+            return window.RadarCoinLore.fetchQuotes(ids, quoteOptions);
+          }
+          return [];
+        }
+      });
       const simulated = options.simulatedQuotes();
       for (const { p } of current) if (p.mode === 'simulation') received[p.coinId] = simulated[p.coinId] || { coinId: p.coinId, status: 'missing' };
       quotes = received;

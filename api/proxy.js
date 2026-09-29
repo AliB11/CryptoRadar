@@ -1,9 +1,12 @@
 'use strict';
 /**
- * Allowlisted market-data proxy with a keyless CoinLore recovery source.
+ * Allowlisted market-data proxy with two keyless recovery sources.
  * CoinLore can supply current snapshots and daily OHLC, but not the 7-day
  * hourly sparkline required by CryptoRadar's analysis engine. In that degraded
  * mode the response is explicitly labeled; callers must not infer hourly data.
+ * Binance sits between the two: it publishes 1h candles without a key, so a
+ * CoinGecko rate limit rebuilds the hourly series instead of switching the
+ * engine off.
  */
 const ALLOW_PATH = /^(coins\/markets|global|search\/trending|coins\/[a-z0-9-]+\/ohlc)$/;
 const ALLOW_QS = new Set([
@@ -13,6 +16,7 @@ const ALLOW_QS = new Set([
 const CG = 'https://api.coingecko.com/api/v3/';
 const { authenticatedFetch } = require('../lib/coingecko.js');
 const CoinLore = require('../lib/coinlore.js');
+const Binance = require('../lib/binance.js');
 const FNG = 'https://api.alternative.me/fng/';
 const UA = 'CryptoRadar/1.1 (signal-terminal; +https://github.com/AliB11/CryptoRadar)';
 
@@ -118,14 +122,23 @@ async function coingeckoWithRecovery(path, query, upstreamUrl) {
     if (error && error.status === 400) throw error;
   }
 
+  // Recovery 1 — a venue that still publishes hourly candles. Skipping this
+  // step is what turned a CoinGecko rate limit into "the terminal is offline":
+  // the next source has no hourly history, so the analysis engine had to switch
+  // itself off. `global` and `search/trending` throw here on purpose and fall
+  // through to the snapshot provider, which does carry those two answers.
   try {
-    return await CoinLore.fetchFallback(path, query, getJSON);
-  } catch (backupError) {
-    // An old CoinGecko cache is a last resort only after the live backup has
-    // also failed. Its cache header remains STALE so the browser and quote
-    // validator can refuse to use it as fresh market data.
-    if (primary && primary.stale) return { ...primary, provider: 'coingecko', history: 'none' };
-    throw primaryError || backupError;
+    return await Binance.recover(path, query, getJSON);
+  } catch (binanceError) {
+    try {
+      return await CoinLore.fetchFallback(path, query, getJSON);
+    } catch (backupError) {
+      // An old CoinGecko cache is a last resort only after both live backups
+      // have also failed. Its cache header remains STALE so the browser and the
+      // quote validator can refuse to use it as fresh market data.
+      if (primary && primary.stale) return { ...primary, provider: 'coingecko', history: 'none' };
+      throw primaryError || backupError;
+    }
   }
 }
 

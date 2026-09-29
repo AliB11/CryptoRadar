@@ -9,7 +9,7 @@
   "functions": {
     "api/pulse.js": { "maxDuration": 60 },
     "api/state.js": { "maxDuration": 30 },
-    "api/proxy.js": { "maxDuration": 20 }
+    "api/proxy.js": { "maxDuration": 30 }
   },
   "headers": [
     {
@@ -26,6 +26,12 @@
     },
     {
       "source": "/(terminal|live|momentum|protection).(js|css)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/lib/(coinlore|binance).js",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=300, must-revalidate" }
       ]

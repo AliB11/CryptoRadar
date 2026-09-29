@@ -2,6 +2,7 @@
 """CryptoRadar — static files + allowlisted market-data proxy."""
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -25,6 +26,19 @@ CG = "https://api.coingecko.com/api/v3/"
 COINLORE = "https://api.coinlore.net/api/"
 FNG = "https://api.alternative.me/fng/"
 UA = "CryptoRadar/1.1 (signal-terminal; +https://github.com/AliB11/CryptoRadar)"
+# Binance public market data — the keyless source of hourly candles. When
+# CoinGecko's shared keyless pool refuses (429) the app used to drop to a
+# snapshot provider with no hourly history, which switched the analysis engine
+# off. This venue publishes 1h candles without a key, so the same recovery chain
+# can rebuild the series instead of degrading. See lib/binance.js for the
+# contract this mirrors (identical rules, identical labels).
+BINANCE_HOSTS = ("https://data-api.binance.vision", "https://api.binance.com")
+BINANCE_QUOTES = ("USDT", "USDC", "FDUSD", "TUSD")
+BINANCE_HOURLY = 168
+BINANCE_MAX_COINS = 100
+BINANCE_MIN_ROWS = 50
+BINANCE_WORKERS = 6
+BINANCE_ALIASES = {"miota": "iota"}
 ALLOW_PATH = re.compile(r"^(coins/markets|global|search/trending|coins/[a-z0-9-]+/ohlc)$")
 ALLOW_QS = {
     "vs_currency", "order", "per_page", "page", "sparkline",
@@ -35,6 +49,11 @@ _CACHE: dict[str, tuple[float, object]] = {}
 _LOCK = threading.Lock()
 _COINLORE_LOCK = threading.Lock()
 _COINLORE_NEXT_AT = 0.0
+# base asset -> trading symbol, and the symbols this venue does not list. Both
+# live for the process: a static answer for "A1USDC does not exist" is worth
+# more than the request it saves.
+_BINANCE_SYMBOLS: dict[str, str] = {}
+_BINANCE_REJECTED: set[str] = set()
 
 
 
@@ -304,6 +323,161 @@ def _coinlore_fallback(path, query):
     raise OSError("CoinLore does not support " + path)
 
 
+def _binance_base(row) -> str | None:
+    raw = str((row.get("symbol") if isinstance(row, dict) else "") or "").strip().lower()
+    if not raw: return None
+    base = BINANCE_ALIASES.get(raw, raw).upper()
+    return base if 2 <= len(base) <= 12 and base.isalnum() and base.isascii() else None
+
+
+def _binance_klines(symbol: str, interval: str = "1h", limit: int = BINANCE_HOURLY):
+    limit = max(24, min(1000, int(limit)))
+    query = f"symbol={urllib.parse.quote(symbol)}&interval={urllib.parse.quote(interval)}&limit={limit}"
+    last = None
+    for host in BINANCE_HOSTS:
+        try:
+            raw, cached, stale = fetch_json(f"{host}/api/v3/klines?{query}", 70)
+            candles = _binance_normalize(raw, limit)
+            if len(candles) >= min(120, limit): return candles
+            last = OSError("Binance candles too short for " + symbol)
+        except OSError as e:
+            last = e
+            # 400 is the venue saying "no such symbol" and 403/451 is it refusing
+            # this caller; the mirror would answer the same, so stop spending
+            # requests on it.
+            if getattr(e, "status", None) in (400, 403, 451): break
+    raise last or OSError("Binance klines unavailable")
+
+
+def _binance_normalize(raw, limit: int):
+    if not isinstance(raw, list): return []
+    out = []
+    for row in raw:
+        if not isinstance(row, list) or len(row) < 11: continue
+        t, opn, high, low, close, closed = (_num(row[i]) for i in (0, 1, 2, 3, 4, 6))
+        quote_vol = _num(row[7])
+        if not all(v is not None and v > 0 for v in (t, opn, high, low, close)): continue
+        opened = t * 1000 if t < 1e12 else t
+        out.append({
+            "t": opened, "o": opn, "h": high, "l": low, "c": close,
+            "q": quote_vol or 0.0,
+            "close": (closed * 1000 if closed and closed < 1e12 else closed) if closed else opened + 3600000,
+        })
+    out.sort(key=lambda candle: candle["t"])
+    return out[-limit:]
+
+
+def _binance_series(rows):
+    """Hourly candles per asset id, bounded concurrency, drops unlisted coins."""
+    queue = [row for row in rows[:BINANCE_MAX_COINS] if _binance_base(row)]
+    series: dict[str, dict] = {}
+    if not queue: return series
+    lock = threading.Lock()
+
+    def worker(chunk):
+        for row in chunk:
+            base = _binance_base(row)
+            known = _BINANCE_SYMBOLS.get(base)
+            candidates = [known] if known else [base + quote for quote in BINANCE_QUOTES]
+            for symbol in candidates:
+                with lock:
+                    if symbol in _BINANCE_REJECTED: continue
+                try:
+                    candles = _binance_klines(symbol)
+                except OSError as e:
+                    status = getattr(e, "status", None)
+                    if status == 400:
+                        with lock: _BINANCE_REJECTED.add(symbol)
+                        continue
+                    # A refusal of this caller (403/451) or a transport failure
+                    # is venue-wide: stop the batch instead of retrying per coin.
+                    if status == 403 or status == 451 or status is None or status >= 500:
+                        return
+                    continue
+                except Exception:
+                    continue  # a malformed row is not worth the whole batch
+                with lock: _BINANCE_SYMBOLS[base] = symbol
+                series[row["id"]] = {"symbol": symbol, "candles": candles}
+                break
+
+    size = max(1, (len(queue) + BINANCE_WORKERS - 1) // BINANCE_WORKERS)
+    chunks = [queue[i:i + size] for i in range(0, len(queue), size)]
+    threads = [threading.Thread(target=worker, args=(chunk,), daemon=True) for chunk in chunks]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join()
+    return series
+
+
+def _binance_merge(rows, series, sparkline: bool = True):
+    now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out = []
+    for row in rows:
+        hit = series.get(row.get("id"))
+        if not hit: continue
+        candles = hit["candles"]
+        last = candles[-1]
+        previous = candles[-2] if len(candles) > 1 else last
+        day_ago = candles[-25] if len(candles) > 24 else candles[0]
+        window = candles[-24:]
+        ch1h = (last["c"] / previous["c"] - 1) * 100 if previous["c"] else None
+        ch24 = (last["c"] / day_ago["c"] - 1) * 100 if day_ago["c"] else None
+        merged = {
+            "id": row.get("id"), "symbol": row.get("symbol"), "name": row.get("name"),
+            "current_price": last["c"],
+            "market_cap": _num(row.get("market_cap")) or 0,
+            "market_cap_rank": _num(row.get("market_cap_rank")),
+            "total_volume": sum(candle["q"] for candle in window),
+            "high_24h": max(candle["h"] for candle in window),
+            "low_24h": min(candle["l"] for candle in window),
+            "price_change_percentage_1h_in_currency": None if ch1h is None else round(ch1h, 2),
+            "price_change_percentage_24h_in_currency": None if ch24 is None else round(ch24, 2),
+            "price_change_percentage_7d_in_currency": _num(row.get("price_change_percentage_7d_in_currency")),
+            "last_updated": now_iso,
+            "radar_provider": "binance",
+            "radar_timestamp_kind": "server-observed",
+        }
+        if sparkline:
+            merged["sparkline_in_7d"] = {"price": [candle["c"] for candle in candles]}
+        out.append(merged)
+    return out
+
+
+def _binance_recover(path, query):
+    """Same contract as _coinlore_fallback: hourly history, labelled, no fabrications."""
+    if path == "coins/markets":
+        sparkline = str(query.get("sparkline", "")).lower() == "true"
+        requested = [part.strip() for part in str(query.get("ids", "")).split(",") if part.strip()]
+        if requested:
+            universe_query = dict(query)
+        else:
+            try: per_page = max(1, min(BINANCE_MAX_COINS, int(query.get("per_page", "100"))))
+            except (TypeError, ValueError): per_page = 100
+            universe_query = {"per_page": str(per_page), "page": "1"}
+        rows = _coinlore_fallback(path, universe_query).get("data") or []
+        if not isinstance(rows, list) or not rows: raise OSError("no asset universe to rebuild")
+        series = _binance_series(rows)
+        merged = _binance_merge(rows, series, sparkline)
+        if len(merged) < min(BINANCE_MIN_ROWS, len(rows)):
+            raise OSError("Binance history unavailable")
+        return {"data": merged, "cached": False, "stale": False, "provider": "binance",
+                "history": "hourly" if sparkline else "none"}
+    match = re.fullmatch(r"coins/([a-z0-9-]+)/ohlc", path)
+    if match:
+        coin_id = match.group(1)
+        asset = _coinlore_assets([coin_id]).get(coin_id)
+        row = {"id": coin_id, "symbol": str(asset.get("symbol") or "")} if asset else None
+        if not row or not _binance_base(row): raise OSError("Binance cannot resolve " + coin_id)
+        try: days = max(1, min(41, int(query.get("days", "7"))))
+        except (TypeError, ValueError): days = 7
+        series = _binance_series([row])
+        hit = series.get(coin_id)
+        if not hit or len(hit["candles"]) < 10:
+            raise OSError("Binance candles unavailable for " + coin_id)
+        data = [[candle["t"], candle["o"], candle["h"], candle["l"], candle["c"]] for candle in hit["candles"]]
+        return {"data": data, "cached": False, "stale": False, "provider": "binance", "history": "hourly"}
+    raise OSError("Binance does not support " + path)
+
+
 def _coingecko_incomplete(path, query, data):
     if path == "coins/markets":
         if not isinstance(data, list) or not data: return True
@@ -341,11 +515,19 @@ def _coingecko_with_recovery(path, query, url):
     except OSError as e:
         primary_error = e
         if getattr(e, "status", None) == 400: raise
+    # Recovery 1 — a venue that still publishes hourly candles. Skipping this
+    # step is what turned a CoinGecko rate limit into "the terminal is offline":
+    # the next source has no hourly history, so the engine had to switch off.
+    # `global` and `search/trending` raise here on purpose and fall through to
+    # the snapshot provider, which does carry those two answers.
     try:
-        return _coinlore_fallback(path, query)
-    except (OSError, ValueError, TypeError) as backup_error:
-        if primary and primary["stale"]: return primary
-        raise primary_error or backup_error
+        return _binance_recover(path, query)
+    except (OSError, ValueError, TypeError) as binance_error:
+        try:
+            return _coinlore_fallback(path, query)
+        except (OSError, ValueError, TypeError) as backup_error:
+            if primary and primary["stale"]: return primary
+            raise primary_error or backup_error
 
 
 def json_bytes(obj: object) -> bytes:

@@ -513,7 +513,7 @@ test('CoinLore recovery renders live snapshots while withholding hourly analysis
   assert.equal($('#btTh').disabled, true, 'backtest controls must be withheld');
   assert.equal($('#btcChart').style.display, 'none', 'the hourly chart must not show empty/fabricated data');
   assert.ok($('#momentumRoot').textContent.includes('غیرفعال'));
-  assert.ok($('#foot').textContent.includes('coinlore'));
+  assert.ok(/coinlore/i.test($('#foot').textContent), 'the footer must name the snapshot provider');
   const csv = window.eval('buildCSV()');
   assert.ok(csv.includes('provider-batch'), 'snapshot CSV must preserve timestamp provenance');
   assert.ok(csv.includes('3.5'), 'snapshot CSV must include provider-reported changes');
@@ -554,6 +554,75 @@ test('static hosts with no proxy use a CoinLore snapshot after CoinGecko fails',
   window.close();
 });
 
+test('a proxy that cannot reach its own upstream lets the page rebuild hourly history itself', { skip: !JSDOM }, async () => {
+  // The local-server case: the proxy answers, but its upstream is unreachable
+  // (offline box, blocked egress, deployment without provider credentials).
+  // The browser still has a route, so the page must not fall to simulation.
+  const tickers = Array.from({ length: 65 }, (_, i) => ({
+    id: String(i + 1), nameid: i === 0 ? 'bitcoin' : 'asset-' + i,
+    name: i === 0 ? 'Bitcoin' : 'Asset ' + i, symbol: i === 0 ? 'BTC' : 'A' + i,
+    price_usd: String(i === 0 ? 68000 : 10 + i), market_cap_usd: String(1e9 - i * 1e6),
+    volume24: '2300000', rank: i + 1, percent_change_1h: '0.4',
+    percent_change_24h: '-1.2', percent_change_7d: '3.5'
+  }));
+  const hour = 3600000;
+  const candles = () => {
+    const now = Date.now();
+    return Array.from({ length: 168 }, (_, i) => {
+      const t = now - (167 - i) * hour;
+      const c = 100 + Math.sin(i / 11) * 4;
+      return [t, String(c - 1), String(c + 1), String(c - 2), String(c), '12.5',
+        t + hour - 1, '250000', 400, '20', '0'];
+    });
+  };
+  const requests = [];
+  const fetch = async url => {
+    requests.push(String(url));
+    const target = new URL(String(url), 'http://localhost');
+    const src = target.searchParams.get('src');
+    if (src === 'health') return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ok: true }) };
+    if (target.pathname === '/api/proxy') {
+      return { ok: false, status: 502, headers: { get: () => null }, json: async () => ({ error: 'upstream' }) };
+    }
+    if (target.hostname === 'api.coingecko.com') {
+      return { ok: false, status: 502, headers: { get: () => null }, json: async () => ({ error: 'upstream' }) };
+    }
+    if (target.hostname === 'api.coinlore.net' && target.pathname === '/api/tickers/') {
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ data: tickers, info: { time: Math.floor(Date.now() / 1000) } }) };
+    }
+    if (target.hostname === 'api.coinlore.net' && target.pathname === '/api/global/') {
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ([{
+        total_mcap: '2500000000000', total_volume: '90000000000', btc_d: '54.2',
+        eth_d: '14.1', mcap_change: '-0.8', coins_count: '14000'
+      }]) };
+    }
+    if (/binance/.test(target.hostname)) {
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => candles() };
+    }
+    return { ok: false, status: 503, headers: { get: () => null }, json: async () => ({ error: 'offline' }) };
+  };
+  const { window, errors } = boot({ fetch });
+  assert.ok(await waitForBoot(window), 'boot overlay must finish');
+  await wait(400);
+  assert.deepEqual(errors, [], 'runtime errors:\n' + errors.join('\n'));
+  const state = window.RadarTerminal.state;
+  const $ = selector => window.document.querySelector(selector);
+  assert.equal(state.proxyDown, true, 'the degraded proxy must be reported, not hidden');
+  assert.equal(state.live, true, 'a broken proxy must not force simulation');
+  assert.equal(state.provider, 'binance');
+  assert.equal(state.historyReady, true, 'hourly history must survive the outage');
+  assert.ok(state.coins.length >= 50);
+  assert.ok(state.coins.every(coin => coin.spark.length >= 120), 'the engine needs 120 hourly points');
+  assert.ok(state.global && state.global.dom > 0, 'the macro block must survive the browser-side path');
+  assert.ok($('#rows').children.length >= 50, 'market rows must render');
+  assert.ok(/binance/i.test($('#foot').textContent), 'the footer must name the rebuilt source');
+  assert.ok(requests.some(url => /binance/.test(url)), 'the venue supplied the candles');
+  // The direct provider is a bounded last resort, not a loop.
+  const direct = requests.filter(url => /api\.coingecko\.com/.test(url));
+  assert.equal(new Set(direct).size, direct.length, 'no provider URL is retried inside the cooldown');
+  window.close();
+});
+
 test('when both market providers are offline, the existing simulation recovery still runs', { skip: !JSDOM }, async () => {
   const requests = [];
   const fetch = async url => {
@@ -572,8 +641,16 @@ test('when both market providers are offline, the existing simulation recovery s
   assert.equal(window.RadarTerminal.state.historyReady, true);
   assert.ok(window.RadarTerminal.state.coins.length >= 90);
   assert.ok(requests.some(url => url.includes('path=coins%2Fmarkets')));
-  assert.ok(requests.every(url => !/api\.coingecko\.com|api\.coinlore\.net/.test(url)),
-    'with a working proxy route, the browser must not bypass it to hammer providers');
+  // The proxy route answers, so it stays the primary path. A proxy that could
+  // not reach its own upstream is a last-resort signal — not an invitation to
+  // open a stream from every visitor's browser — so the page tries the provider
+  // once and then backs off, and says the proxy is degraded.
+  assert.equal(window.RadarTerminal.state.proxyDown, true, 'a failing proxy must be reported');
+  const direct = requests.filter(url => /api\.coingecko\.com/.test(url));
+  assert.equal(new Set(direct).size, direct.length,
+    'each provider URL is tried at most once per cooldown, never per refresh');
+  assert.ok(direct.length > 0 && direct.length <= 3,
+    'the bypass is bounded, not a stream: ' + direct.length);
   window.close();
 });
 

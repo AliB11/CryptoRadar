@@ -14,6 +14,8 @@ const SHELL = [
   '/terminal.js',
   '/live.css',
   '/live.js',
+  '/lib/coinlore.js',
+  '/lib/binance.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png'
 ];
