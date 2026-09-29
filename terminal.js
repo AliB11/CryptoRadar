@@ -181,37 +181,62 @@ async function probeProxy(){
     return !!(v&&v.ok);
   }catch(e){return false;}finally{clearTimeout(timer);}
 }
+/* A proxy that answers but cannot reach its upstream must not end the chain:
+   that is exactly the local-server case, where the browser still has a route
+   to the provider. The cooldown keeps one broken deployment from turning into
+   a refresh loop against the shared keyless pool. */
+const directCooldown=new Map();
+const DIRECT_BACKOFF_MS=60000;
+function directAllowed(url){
+  const until=directCooldown.get(url)||0;
+  return Date.now()-until>=0;
+}
+function directFailed(url){
+  directCooldown.set(url,Date.now()+DIRECT_BACKOFF_MS);
+}
 async function cgGet(pathWithQuery,ttl){
   const urls=[];
   // Re-probe on each request: a transient proxy failure must not permanently
   // route every subsequent refresh through the rate-limited public API.
   if(location.protocol!=='file:')urls.push(cgUrl(pathWithQuery));
-  urls.push('https://api.coingecko.com/api/v3/'+pathWithQuery);
+  const direct='https://api.coingecko.com/api/v3/'+pathWithQuery;
+  if(location.protocol!=='file:'&&directAllowed(direct))urls.push(direct);
   let last;
   for(const u of urls){
     try{
       const v=await Hub.jget(u,ttl);
-      if(u.startsWith('/api/')){state.proxy=true;state.proxyMissing=false;}
+      if(u.startsWith('/api/')){state.proxy=true;state.proxyMissing=false;state.proxyDown=false;}
+      else{state.proxy=false;state.proxyMissing=true;}
       return v;
-    }catch(e){last=e;if(u.startsWith('/api/')){state.proxy=false;
-      if(e.status===404)state.proxyMissing=true;
-      if(e.status&&e.status!==404)throw e;}}
+    }catch(e){last=e;
+      if(u.startsWith('/api/')){state.proxy=false;
+        if(e.status===404)state.proxyMissing=true;
+        // 404 = no proxy here, 4xx otherwise = our own request was wrong.
+        if(e.status&&e.status>=400&&e.status<500&&e.status!==404)throw e;
+        state.proxyDown=true;
+      }else{directFailed(u);}
+    }
   }
   throw last||new Error('cg');
 }
 async function fngGet(ttl){
   const urls=[];
   if(location.protocol!=='file:')urls.push('/api/proxy?src=fng&limit=30');
-  urls.push('https://api.alternative.me/fng/?limit=30');
+  const direct='https://api.alternative.me/fng/?limit=30';
+  if(location.protocol!=='file:'&&directAllowed(direct))urls.push(direct);
   let last;
   for(const u of urls){
     try{
       const v=await Hub.jget(u,ttl);
-      if(u.startsWith('/api/')){state.proxy=true;state.proxyMissing=false;}
+      if(u.startsWith('/api/')){state.proxy=true;state.proxyMissing=false;state.proxyDown=false;}
       return v;
-    }catch(e){last=e;if(u.startsWith('/api/')){state.proxy=false;
-      if(e.status===404)state.proxyMissing=true;
-      if(e.status&&e.status!==404)throw e;}}
+    }catch(e){last=e;
+      if(u.startsWith('/api/')){state.proxy=false;
+        if(e.status===404)state.proxyMissing=true;
+        if(e.status&&e.status>=400&&e.status<500&&e.status!==404)throw e;
+        state.proxyDown=true;
+      }else{directFailed(u);}
+    }
   }
   throw last||new Error('fng');
 }
@@ -253,7 +278,7 @@ const store={
 /* ---------- وضعیت کلی ---------- */
 const state={coins:[],btc:null,global:null,live:false,proxy:null,proxyMissing:false,lastUpdate:null,
   provider:'unknown',historyReady:true,historyResolution:'hourly',
-  filter:'ALL',sort:'power',query:'',selected:null,
+  filter:'ALL',sort:'power',query:'',selected:null,proxyDown:false,
   btcOpts:{ema12:true,ema26:true,boll:true,piv:true,div:true},
   drOpts:{ema12:false,ema26:true,boll:true,div:true},
   hoverBtc:null,hoverDr:null,byId:new Map(),dots:new Map(),refreshing:false,
@@ -263,6 +288,8 @@ const state={coins:[],btc:null,global:null,live:false,proxy:null,proxyMissing:fa
   pf:(()=>{const rows=store.get('radar_pf',[]);return Array.isArray(rows)?rows:[];})(),
   alerts:store.get('radar_al',[]),
   bt:null,btUI:{th:25,risk:1},forcedSim:false};
+const PROVIDER_LABEL={coingecko:'CoinGecko',coinlore:'CoinLore',binance:'Binance',simulation:'شبیه‌سازی'};
+function providerLabel(p){return PROVIDER_LABEL[p]||p||'نامشخص';}
 const QA={results:null,ms:0};
 const PAL=['#1fd08a','#e8b04b','#f24d5f','#57cf9b','#ef8b97','#eec27a','#7c8fa3','#5ee3ac','#ff8290','#93a4b8','#c9a227','#3aa76d'];
 
@@ -1021,6 +1048,16 @@ function marketCoin(x){
     atlDate:typeof x.atl_date==='string'?x.atl_date:null,spark};
 }
 
+/* The macro block arrives wrapped (`{data:{...}}`) from a proxy and unwrapped
+   from a browser-side snapshot. Both shapes mean the same thing. */
+function globalBlock(g){
+  const d=(g&&g.data)||g||{};
+  return {dom:d.market_cap_percentage&&d.market_cap_percentage.btc,
+    domEth:d.market_cap_percentage&&d.market_cap_percentage.eth,
+    total:d.total_market_cap&&d.total_market_cap.usd,
+    vol24t:d.total_volume&&d.total_volume.usd,
+    chg24:d.market_cap_change_percentage_24h_usd,active:d.active_cryptocurrencies};
+}
 async function fetchLive(){
   const mk=page=>cgGet(`coins/markets?vs_currency=usd&order=market_cap_desc&per_page=150&page=${page}&sparkline=true&price_change_percentage=1h,24h,7d,30d,200d,1y`,80000);
   // One page keeps public-provider traffic bounded. A backup provider may
@@ -1032,33 +1069,35 @@ async function fetchLive(){
     if(provider==='coinlore'){
       const rows=(Array.isArray(a)?a:[]).map(marketCoin).filter(Boolean).slice(0,100);
       if(rows.length<50)throw new Error('incomplete snapshot');
-      const d=(g&&g.data)||{};
-      return {coins:rows,global:{dom:d.market_cap_percentage&&d.market_cap_percentage.btc,
-        domEth:d.market_cap_percentage&&d.market_cap_percentage.eth,
-        total:d.total_market_cap&&d.total_market_cap.usd,vol24t:d.total_volume&&d.total_volume.usd,
-        chg24:d.market_cap_change_percentage_24h_usd,active:d.active_cryptocurrencies},
+      return {coins:rows,global:globalBlock(g),
         live:true,provider:'coinlore',historyReady:false,historyResolution:'none'};
     }
     const b=Array.isArray(a)&&a.length<60 ? await mk(2).catch(()=>null) : null;
     const raw=[...(Array.isArray(a)?a:[]),...(Array.isArray(b)?b:[])];
     const coins=raw.map(marketCoin).filter(x=>x&&x.spark.length>=120).slice(0,100);
     if(coins.length<50)throw new Error('insufficient hourly history');
-    const d=(g&&g.data)||{};
-    const gl={dom:d.market_cap_percentage&&d.market_cap_percentage.btc,
-              domEth:d.market_cap_percentage&&d.market_cap_percentage.eth,
-              total:d.total_market_cap&&d.total_market_cap.usd,
-              vol24t:d.total_volume&&d.total_volume.usd,
-              chg24:d.market_cap_change_percentage_24h_usd,
-              active:d.active_cryptocurrencies};
-    return {coins,global:gl,live:true,provider,historyReady:true,historyResolution:'hourly'};
+    return {coins,global:globalBlock(g),live:true,provider,historyReady:true,historyResolution:'hourly'};
   }catch(error){
-    // Without a working same-origin proxy, try a best-effort keyless snapshot
-    // directly. This also covers static hosts and index.html opened as a file;
-    // history-dependent analysis remains disabled in either case.
-    if((location.protocol==='file:'||state.proxyMissing)&&window.RadarCoinLore&&RadarCoinLore.fetchSnapshot){
-      const snapshot=await RadarCoinLore.fetchSnapshot();
-      const rows=snapshot.coins.map(marketCoin).filter(Boolean).slice(0,100);
-      if(rows.length>=50)return {...snapshot,coins:rows,historyReady:false,historyResolution:'none'};
+    // No same-origin proxy, or a proxy that could not reach its upstream. Both
+    // are recoverable from the page itself, so try in order of usefulness:
+    // hourly candles first (the engine stays on), a price snapshot second
+    // (analysis stays off and says so). This also covers static hosts and
+    // index.html opened as a file.
+    if(location.protocol==='file:'||state.proxyMissing||state.proxyDown){
+      if(window.RadarBinance&&RadarBinance.fetchSnapshot){
+        try{
+          const snapshot=await RadarBinance.fetchSnapshot();
+          const rows=snapshot.coins.map(marketCoin).filter(Boolean).slice(0,100);
+          if(rows.length>=50)return {coins:rows,global:globalBlock(snapshot.global),live:true,
+            provider:snapshot.provider||'binance',historyReady:true,historyResolution:'hourly'};
+        }catch(binanceError){/* fall through to the snapshot source */}
+      }
+      if(window.RadarCoinLore&&RadarCoinLore.fetchSnapshot){
+        const snapshot=await RadarCoinLore.fetchSnapshot();
+        const rows=snapshot.coins.map(marketCoin).filter(Boolean).slice(0,100);
+        if(rows.length>=50)return {coins:rows,global:globalBlock(snapshot.global),live:true,
+          provider:snapshot.provider||'coinlore',historyReady:false,historyResolution:'none'};
+      }
     }
     throw error;
   }
@@ -1092,9 +1131,15 @@ function momentumModel(){
   const source=state.live?'live':'simulation',seen=new Set(),coins=[];
   const push=c=>{if(!c||!c.id||seen.has(c.id)||MOMENTUM_SKIP.has(c.id))return;seen.add(c.id);coins.push(momentumInputFrom(c,source));};
   state.coins.forEach(push);(state.momentumExtra||[]).forEach(push);
-  const universeNote=state.live
+  // A rebuilt venue series is 7 days of hourly candles: real, but it cannot
+  // prove a project's age, and this screen refuses to guess one. Say so
+  // instead of letting the empty board look like a broken filter.
+  const depthNote=state.live&&state.provider==='binance'
+    ?'تاریخچهٔ ساعتی ۷روزه از Binance بازسازی شده است؛ سن پروژه بدون دادهٔ فهرست بازار اثبات نمی‌شود و غربال تا بازگشتِ آن منبع رد می‌کند. '
+    :'';
+  const universeNote=depthNote+(state.live
     ?(state.momentumExtra&&state.momentumExtra.length?'جهان غربال: ۱۰۰ ارز برتر به‌علاوهٔ پرترافیک‌ترین‌ها بر اساس حجم. نسخه‌های رپ‌شدهٔ لنگر حذف شده‌اند.':'جهان حجم جداگانه دریافت نشد؛ غربال فعلاً فقط روی ۱۰۰ ارز برتر است.')
-    :'حالت شبیه‌سازی — حکم‌ها بازار زنده نیستند و سن پروژه‌ها فرض شده است.';
+    :'حالت شبیه‌سازی — حکم‌ها بازار زنده نیستند و سن پروژه‌ها فرض شده است.');
   return {board:RadarMomentum.screenAll(coins,momentumContext()),ctx:momentumContext(),universeNote,knownIds:state.coins.map(c=>c.id)};
 }
 function renderMomentum(){
@@ -1212,7 +1257,7 @@ function renderTop(){
     return;
   }
   const rgTxt={RISK_ALT:['فاز ریسک‌پذیری — جریان به آلت‌ها',C.up],RISK_BTC:['فاز رشد با رهبری بیت‌کوین',C.up],RANGE:['فاز رِنج — بازار در انتظار کاتالیزور',C.amber],RISK_OFF:['فاز ریسک‌گریزی — پرهیز از پوزیشن',C.down]}[rg];
-  const source=state.live?(state.provider==='coingecko'?'CoinGecko · زنده':state.provider+' · زنده'):(state.forcedSim?'شبیه‌سازی اجباری':'شبیه‌سازی محلی');
+  const source=state.live?providerLabel(state.provider)+' · زنده':(state.forcedSim?'شبیه‌سازی اجباری':'شبیه‌سازی محلی');
   $('#topStatus').innerHTML=
     `<span class="tstat"><i class="dot" style="background:${rgTxt[1]}"></i>${rgTxt[0]}</span>`+
     `<span class="tstat">امتیاز بازار ${N((m.score>0?'+':'')+m.score)}</span>`+
@@ -2091,7 +2136,7 @@ function renderOverview(){
     cell('ترس و طمع',state.fng?N(state.fng.value):'—',state.fng?fngLabel(state.fng.value):'بدون داده'),
     cell('سیگنال‌های فعال',N(fa(m.active)),`${N(fa(aGrade))} کارتِ رده A/B+ · ${N(fa(m.dist.PRONE||0))} در فشردگی`),
     cell('نرخ توفیقِ بازآزمایی',m.winRate?N(Math.round(m.winRate*100))+'%':'—',`${N(fa(m.sigTot))} نمونه درون‌نمونه‌ای`),
-    cell('منبع داده',state.live?(state.proxy?'پروکسی · زنده':'مستقیم · زنده'):(state.forcedSim?'شبیه‌سازی اجباری':'شبیه‌سازی'),
+    cell('منبع داده',state.live?`${esc(providerLabel(state.provider))}${state.proxy?' · پروکسی':' · مستقیم'} · زنده`:(state.forcedSim?'شبیه‌سازی اجباری':'شبیه‌سازی'),
          state.lastUpdate?state.lastUpdate.toLocaleTimeString('fa-IR'):'—')
   ].join('');
 }
@@ -2227,8 +2272,11 @@ function checkAlerts(){
 function renderFooter(){
   const qa=QA.results?` · خودآزمایی موتور: <b>${fa(QA.results.filter(r=>r.ok).length)}/${fa(QA.results.length)}</b>`:'';
   const source=!state.live?(state.forcedSim?'شبیه‌سازی اجباری — بدون درخواست شبکه':'شبیه‌سازی محلی — اتصال برقرار نشد')
-    :!state.historyReady?`${esc(state.provider)} · snapshot زنده؛ تاریخچهٔ ساعتی موجود نیست`
-    :(state.provider==='coingecko'?(state.proxy?'CoinGecko از طریق پروکسی':'CoinGecko مستقیم'):`${esc(state.provider)} · دادهٔ بازار`)+ ' + alternative.me';
+    :!state.historyReady?`${esc(providerLabel(state.provider))} · snapshot زنده؛ تاریخچهٔ ساعتی موجود نیست`
+    :(state.provider==='coingecko'
+        ?(state.proxy?'CoinGecko از طریق پروکسی':'CoinGecko مستقیم')
+        :`${esc(providerLabel(state.provider))}${state.proxy?' از طریق پروکسی':' مستقیم'} · تاریخچهٔ ساعتی بازسازی‌شده`)
+      + ' + alternative.me';
   const capabilities=state.historyReady
     ?`تحلیل ${N(fa(100))} دارایی · واچ‌لیست مومنتوم · واگرایی قیمت/RSI · رده‌بندی هم‌گرایی ۸ عاملی · بک‌تست درون‌نمونه‌ای walk-forward · تم شب/روز`
     :'نمایش قیمت، ارزش بازار، حجم و تغییرات ارائه‌شدهٔ منبع · تحلیل تکنیکال و بک‌تست غیرفعال تا بازگشت تاریخچهٔ ساعتی';
@@ -2688,7 +2736,7 @@ async function doRefresh(silent){
   if(data){
     try{await safePipeline(data);}
     catch(e){toast('به‌روزرسانی ناقص انجام شد','warn');}
-    if(!silent)toast(!state.live?'به‌روزرسانی در حالت شبیه‌سازی':!state.historyReady?`قیمت snapshot از ${state.provider} به‌روز شد؛ تحلیل ساعتی غیرفعال است`:'داده زنده به‌روزرسانی شد','ok');
+    if(!silent)toast(!state.live?'به‌روزرسانی در حالت شبیه‌سازی':!state.historyReady?`قیمت snapshot از ${providerLabel(state.provider)} به‌روز شد؛ تحلیل ساعتی غیرفعال است`:'داده زنده به‌روزرسانی شد','ok');
   }else if(state.coins.length){
     try{renderPulse();}catch(e){}
   }
@@ -3185,8 +3233,8 @@ window.RadarTerminal = {
   await sleep(300);
   finishBoot();
   try{applyRoute();}catch(e){}
-  if(state.live&&state.historyReady)toast('داده زنده دریافت شد — تحلیل ساعتی و بک‌تست آماده است','ok');
-  else if(state.live)toast(`قیمت snapshot از ${state.provider} دریافت شد — تحلیل تکنیکال تا بازگشت تاریخچه غیرفعال است`,'warn',6500);
+  if(state.live&&state.historyReady)toast(`داده زنده از ${providerLabel(state.provider)} دریافت شد — تحلیل ساعتی و بک‌تست آماده است`,'ok');
+  else if(state.live)toast(`قیمت snapshot از ${providerLabel(state.provider)} دریافت شد — تحلیل تکنیکال تا بازگشت تاریخچه غیرفعال است`,'warn',6500);
   else toast('حالت شبیه‌سازی فعال است — همه سازوکارها همانند حالت زنده کار می‌کنند','warn',5000);
   cd=REFRESH;paintCd();
 })();
