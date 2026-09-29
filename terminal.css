@@ -717,3 +717,13 @@ body.lock{overflow:hidden}
   :root{--gutter:var(--sp-4);--sec-gap:var(--sp-6)}
   .rail a{font-size:var(--fs-xs);padding:7px 9px}
 }
+
+/* Explicitly bounded rendering for provider fallbacks without hourly history. */
+.snapshot-placeholder{
+  min-height:132px;width:100%;display:grid;place-items:center;text-align:center;
+  padding:24px;color:var(--muted);font-size:12px;line-height:1.9;
+  background:var(--panel);border:1px dashed var(--line2);border-radius:12px;
+}
+.snapshot-row{cursor:pointer}
+.snapshot-row .c-score,.snapshot-row .c-spark,.snapshot-row .c-grade,.snapshot-row .c-win{color:var(--faint)}
+.snapshot-row .c-sig{justify-self:start}

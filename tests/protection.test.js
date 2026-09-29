@@ -281,6 +281,37 @@ test('failed quote requests and simulated ids never produce manufactured live qu
   assert.equal(quotes['../bad'], undefined);
 });
 
+test('optional backup quotes replace missing or stale data but retain every freshness check', async () => {
+  let fallbackIds;
+  const quotes = await E.fetchQuotes(['bitcoin', 'ethereum'], {
+    now: () => NOW,
+    fetch: async () => response([
+      row('bitcoin', 90),
+      { ...row('ethereum', 40), last_updated: new Date(NOW - 3600000).toISOString() }
+    ]),
+    fallbackQuotes: async ids => {
+      fallbackIds = ids;
+      return [
+        { id: 'ethereum', current_price: 41, last_updated: new Date(NOW).toISOString(),
+          radar_provider: 'coinlore', radar_timestamp_kind: 'provider-batch' }
+      ];
+    }
+  });
+  assert.deepEqual(fallbackIds, ['ethereum'], 'only the stale quote should use the backup');
+  assert.equal(quotes.bitcoin.price, 90, 'a valid primary quote remains preferred');
+  assert.equal(quotes.ethereum.price, 41);
+  assert.equal(quotes.ethereum.provider, 'coinlore');
+  assert.equal(quotes.ethereum.timestampKind, 'provider-batch');
+  assert.equal(quotes.ethereum.status, 'fresh');
+
+  const stale = await E.fetchQuotes(['bitcoin'], {
+    now: () => NOW, fetch: async () => { throw new Error('offline'); },
+    fallbackQuotes: async () => [{ id: 'bitcoin', current_price: 80,
+      last_updated: new Date(NOW - 3600000).toISOString(), radar_provider: 'coinlore' }]
+  });
+  assert.equal(stale.bitcoin.status, 'stale', 'a backup must not bypass quote-age validation');
+});
+
 test('quote requests are batched without dropping held assets', async () => {
   let calls = 0;
   const ids = Array.from({ length: 101 }, (_, i) => 'asset-' + i);
