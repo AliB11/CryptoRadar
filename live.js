@@ -629,7 +629,7 @@
 
       <section class="panel live-panel wide" id="lvSignals">
         <div class="panel-head"><h3>معاملات خودکار سیگنالی · فقط کاغذی</h3></div>
-        <p class="live-hint">خرید فقط با ردهٔ A+ (۸ تأیید) در دو مشاهدهٔ تازه با فاصلهٔ حداقل ۱ دقیقه و حداکثر ۵ دقیقه، و قیمت مستقل سرور انجام می‌شود. فروشِ A+ پوزیشن خرید را می‌بندد. تأیید شروط به معنی تضمین سود نیست؛ ورود ۱۰۰ دلار، سقف ۵ پوزیشن، حد ضرر ۵٪ و هدف ۱۰٪. رده‌بندی در مرورگر انجام می‌شود؛ سرور تازگی قیمت، اختلاف حداکثر ۲٪ و سقف معاملات را کنترل می‌کند، نه درستی پیش‌بینی را. هیچ سفارش واقعی و هیچ تغییری در پرتفوی دستی رخ نمی‌دهد. فروش فقط پوزیشن خریدِ کاغذی را می‌بندد؛ شورت باز نمی‌شود. سیگنال جدید فقط با صفحهٔ باز تولید می‌شود؛ حد ضرر و هدف با زمان‌سنج سرور حتی پس از بستن صفحه پایش می‌شوند. نیازمند پایش فعال، توکن و انبار پایدار است.</p>
+        <p class="live-hint">خرید فقط با ردهٔ A+ (۸ تأیید) در دو مشاهدهٔ تازه با فاصلهٔ حداقل ۱ دقیقه و حداکثر ۵ دقیقه، و قیمت مستقل سرور انجام می‌شود. فروشِ A+ پوزیشن خرید را می‌بندد. تأیید شروط به معنی تضمین سود نیست؛ ورود ۱۰۰ دلار، سقف ۵ پوزیشن، حد ضرر ۵٪ و هدف ۱۰٪. رده‌بندی هم در مرورگر و هم با اسکنِ خودکارِ سرور (هر ۲ دقیقه، همان موتور) انجام می‌شود؛ سرور تازگی قیمت، اختلاف حداکثر ۲٪ و سقف معاملات را کنترل می‌کند، نه درستی پیش‌بینی را. هیچ سفارش واقعی و هیچ تغییری در پرتفوی دستی رخ نمی‌دهد. فروش فقط پوزیشن خریدِ کاغذی را می‌بندد؛ شورت باز نمی‌شود. تولید سیگنال، ورود، حد ضرر و هدف همه با زمان‌سنج سرور حتی پس از بستن صفحه کار می‌کنند. نیازمند پایش فعال، توکن و انبار پایدار است.</p>
         <div id="lvSignalLedger"></div>
       </section>
 
@@ -731,6 +731,12 @@
         'آخرین تیک: ' + esc(fa(summary.fills || 0)) + ' ثبت'),
       row('معاملات سیگنالیِ کاغذی', esc(fa(((api.state && api.state.signalPositions) || []).filter(p => p.status === 'OPEN').length)),
         'پوزیشن باز · ' + fa(((api.state && api.state.signalLedger) || []).length) + ' ثبت'),
+      row('تولید سیگنالِ سرور',
+        esc(({ scanned: 'فعال — اسکن شد', 'not-due': 'فعال — در انتظار نوبت بعدی', 'no-data': 'بدون دادهٔ ساعتی', error: 'خطا در دریافت', disabled: 'خاموش' }[(summary.signalScan && summary.signalScan.status)] || '—')),
+        (summary.signalScan && summary.signalScan.status === 'scanned'
+          ? esc(fa(summary.signalScan.queued || 0) + ' صفِ تازه از ' + fa(summary.signalScan.rows || 0) + ' ردیف')
+          : 'هر ' + fa(120) + ' ثانیقه یک‌بار') +
+        (summary.onchain ? ' · دروازهٔ زنجیره‌ای: ' + (summary.onchain.veto ? 'مسدود' : (summary.onchain.status === 'not-configured' ? 'بدون کلید' : 'باز')) : '')),
       row('دستگاه‌های اعلان', esc(fa(subs)), api.pushKey ? 'کلید سرور آماده است' : 'کلید VAPID تنظیم نشده'),
       row('انبارِ وضعیت', esc((api.state && api.state.store) || '—'),
         ready() ? 'متصل' : (!cfg.token ? 'بدون توکن' : 'پایش خاموش')),
@@ -1006,10 +1012,10 @@
     if (!host) return;
     const positions = (api.state && api.state.signalPositions) || [];
     const rows = ((api.state && api.state.signalLedger) || []).slice(-20).reverse();
-    const reasons = { 'awaiting-confirmation': 'منتظر تأیید دوم A+ (حداقل یک دقیقه)', 'invalid-or-stale': 'قیمت یا سیگنال کهنه/نامعتبر', 'old-quote': 'قیمت قدیمی‌تر از سیگنال', 'price-drift': 'تغییر قیمت بیش از ۲٪', 'already-open': 'پوزیشن از قبل باز است', cooldown: 'فاصلهٔ ۶ ساعته تا ورود مجدد', limit: 'سقف ۵ پوزیشن', 'no-open-position': 'پوزیشن خریدی برای فروش نیست', 'already-seen': 'قبلاً بررسی شده', 'before-entry': 'مشاهده مربوط به قبل از ورود', filled: 'اجرا شد' };
+    const reasons = { 'awaiting-confirmation': 'منتظر تأیید دوم A+ (حداقل یک دقیقه)', 'invalid-or-stale': 'قیمت یا سیگنال کهنه/نامعتبر', 'old-quote': 'قیمت قدیمی‌تر از سیگنال', 'price-drift': 'تغییر قیمت بیش از ۲٪', 'already-open': 'پوزیشن از قبل باز است', cooldown: 'فاصلهٔ ۶ ساعته تا ورود مجدد', limit: 'سقف ۵ پوزیشن', 'no-open-position': 'پوزیشن خریدی برای فروش نیست', 'already-seen': 'قبلاً بررسی شده', 'before-entry': 'مشاهده مربوط به قبل از ورود', filled: 'اجرا شد', 'onchain-veto': 'دروازهٔ زنجیره‌ای — ورود جدید مسدود' };
     const results = (api.state && api.state.signalResults) || [];
     const opened = positions.filter(p => p.status === 'OPEN');
-    host.innerHTML = '<p class="live-hint">تولید سیگنال: ' + (api.state.signalEvaluationAt && Date.now()-api.state.signalEvaluationAt < 300000 ? 'فعال در مرورگر' : 'منتظر تحلیل تازهٔ مرورگر') + ' · پوزیشن باز: ' + fa(opened.length) +
+    host.innerHTML = '<p class="live-hint">تولید سیگنال: ' + (api.state.signalEvaluationAt && Date.now()-api.state.signalEvaluationAt < 300000 ? 'فعال (مرورگر یا اسکن سرور)' : 'منتظر تحلیل تازه') + ' · پوزیشن باز: ' + fa(opened.length) +
       (opened.length ? ' · ' + opened.map(p => esc(p.symbol) + ' (' + esc(price(p.entryPrice)) + ')').join('، ') : '') + '</p>' +
       (rows.length ? '<div class="live-table-wrap"><table class="live-table"><thead><tr><th>زمان</th><th>دارایی</th><th>جهت</th><th>دلیل</th><th>قیمت</th><th>سود/زیان ناخالص</th></tr></thead><tbody>' +
         rows.map(r => '<tr><td>' + esc(when(r.at)) + '</td><td>' + esc(r.symbol) + '</td><td>' +

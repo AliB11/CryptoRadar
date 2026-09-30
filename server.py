@@ -648,6 +648,25 @@ class Handler(SimpleHTTPRequestHandler):
                 limit = min(30, max(1, limit))
                 data, cached, stale = fetch_json(f"{FNG}?limit={limit}", 600)
                 return self._json(200, data, "STALE" if stale else ("HIT" if cached else "MISS"), "alternative.me")
+            if src == "cq":
+                # CryptoQuant on-chain context — same Node implementation as the
+                # Vercel proxy (single code path), cached for 10 minutes.
+                with _LOCK:
+                    hit = _CACHE.get("cq")
+                if hit and time.time() - hit[0] < 600:
+                    return self._json(200, hit[1], "HIT", "cryptoquant")
+                if not NODE_BIN:
+                    return self._json(503, {"error": "node-runtime-required"})
+                script = ("const c=require('./lib/cryptoquant.js');"
+                          "c.getContext().then(x=>process.stdout.write(JSON.stringify(x)))"
+                          ".catch(()=>process.stdout.write(JSON.stringify({status:'error'})));")
+                env = dict(os.environ)
+                proc = subprocess.run([NODE_BIN, "-e", script], cwd=ROOT, env=env,
+                                      capture_output=True, timeout=20)
+                data = json.loads(proc.stdout.decode("utf-8") or '{"status":"error"}')
+                with _LOCK:
+                    _CACHE["cq"] = (time.time(), data)
+                return self._json(200, data, "MISS", "cryptoquant")
             if src != "cg":
                 return self._json(400, {"error": "src"})
             path = one("path")
