@@ -1,5 +1,5 @@
 /* رادارِ بازار — service worker */
-const CACHE = 'radar-shell-v6-live';
+const CACHE = 'radar-shell-v7-engine';
 const SHELL = [
   '/',
   '/index.html',
@@ -16,6 +16,7 @@ const SHELL = [
   '/live.js',
   '/lib/coinlore.js',
   '/lib/binance.js',
+  '/lib/engine.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png'
 ];

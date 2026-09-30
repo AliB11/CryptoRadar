@@ -17,6 +17,7 @@ const CG = 'https://api.coingecko.com/api/v3/';
 const { authenticatedFetch } = require('../lib/coingecko.js');
 const CoinLore = require('../lib/coinlore.js');
 const Binance = require('../lib/binance.js');
+const CryptoQuant = require('../lib/cryptoquant.js');
 const FNG = 'https://api.alternative.me/fng/';
 const UA = 'CryptoRadar/1.1 (signal-terminal; +https://github.com/AliB11/CryptoRadar)';
 
@@ -173,6 +174,14 @@ module.exports = async function handler(req, res) {
       sendData(res, { ...reply, provider: 'alternative.me', history: 'none' }, 'none');
       return;
     }
+    if (src === 'cq') {
+      // CryptoQuant on-chain context — server-side key only, and `status:
+      // not-configured` without one, so the terminal can render an honest hint.
+      const context = await CryptoQuant.getContext();
+      res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=600, must-revalidate');
+      sendData(res, { data: context, cached: !!context.cached, provider: 'cryptoquant' }, 'none');
+      return;
+    }
     if (src !== 'cg') {
       res.statusCode = 400;
       res.end(JSON.stringify({ error: 'src' }));
@@ -204,3 +213,7 @@ module.exports = async function handler(req, res) {
     res.end(JSON.stringify({ error: 'upstream', detail: String(e && e.message || e) }));
   }
 };
+
+// Long enough for two CryptoQuant metric fetches (12s timeouts) on top of the
+// usual CoinGecko recovery chain; short enough to stay inside Hobby (60s).
+module.exports.config = { maxDuration: 30 };

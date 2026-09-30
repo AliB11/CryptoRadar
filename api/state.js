@@ -124,8 +124,8 @@ async function handler(req, res) {
     const cleared = {
       ...monitor.emptyState(), ledger,
       signalLedger: state.signalLedger, signalPositions: state.signalPositions,
-    signalResults: state.signalResults || [], signalEvaluationAt: state.signalEvaluationAt || 0,
-    autoExec: process.env.PAPER_AUTO_EXEC !== 'false', signalSeen: state.signalSeen, signalConfirm: state.signalConfirm,
+      signalResults: state.signalResults || [], signalEvaluationAt: state.signalEvaluationAt || 0,
+      autoExec: process.env.PAPER_AUTO_EXEC !== 'false', signalSeen: state.signalSeen, signalConfirm: state.signalConfirm,
       subscriptions: body.keepSubscriptions === false ? {} : (state.subscriptions || {}),
       version: Number(state.version || 0) + 1, updatedAt: Date.now()
     };

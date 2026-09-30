@@ -328,6 +328,13 @@ main{max-width:var(--shell);margin:0 auto;padding:0 var(--gutter) 60px;position:
 .gstat span{font-size:10.5px;color:var(--faint)}
 .gstat b{font-size:17px}
 .gstat em{font-style:normal;font-size:10.5px;color:var(--muted)}
+.cq-stats:not(:empty){margin:-16px 0 22px}
+.cq-chips,.cq-hint{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.cq-hint{display:block;background:var(--panel);padding:12px 16px;font-size:11.5px;color:var(--muted);line-height:1.9}
+.cq-hint code{font-size:11px;background:rgba(127,127,127,.12);padding:1px 5px;border-radius:5px}
+.cq-chip{background:var(--panel);padding:10px 16px;display:flex;flex-direction:column;gap:3px;flex:1 1 auto;min-width:170px}
+.cq-chip span{font-size:10.5px;color:var(--faint)}
+.cq-chip b{font-size:14px}
 .pulse-grid{display:grid;grid-template-columns:300px 1fr 1fr;gap:22px;align-items:stretch}
 .fng-card{display:flex;flex-direction:column}
 .fng-val{display:flex;align-items:baseline;justify-content:center;gap:8px;margin-top:4px}
